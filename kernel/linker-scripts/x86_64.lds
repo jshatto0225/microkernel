@@ -15,6 +15,10 @@ PHDRS
     data PT_LOAD;
 }
 
+/* Define symbols for kernel mapping */
+PROVIDE(__kernel_start = .);
+PROVIDE(__kernel_base = 0xffffffff80000000);
+
 SECTIONS
 {
     /* We want to be placed in the topmost 2GiB of the address space, for optimisations */
@@ -34,14 +38,18 @@ SECTIONS
     . = ALIGN(CONSTANT(MAXPAGESIZE));
 
     .text : {
+        _text_start = .;
         *(.text .text.*)
+        _text_end = .;
     } :text
 
     /* Move to the next memory page for .rodata */
     . = ALIGN(CONSTANT(MAXPAGESIZE));
 
     .rodata : {
+        _rodata_start = .;
         *(.rodata .rodata.*)
+        _rodata_end = .;
     } :rodata
 
     /* Add a .note.gnu.build-id output section in case a build ID flag is added to the */
@@ -54,7 +62,9 @@ SECTIONS
     . = ALIGN(CONSTANT(MAXPAGESIZE));
 
     .data : {
+        _data_start = .;
         *(.data .data.*)
+        _data_end = .;
     } :data
 
     /* NOTE: .bss needs to be the last thing mapped to :data, otherwise lots of */
@@ -64,6 +74,7 @@ SECTIONS
     .bss : {
         *(.bss .bss.*)
         *(COMMON)
+        _bss_end = .;
     } :data
 
     /* Discard .note.* and .eh_frame* since they may cause issues on some hosts. */
@@ -71,4 +82,6 @@ SECTIONS
         *(.eh_frame*)
         *(.note .note.*)
     }
+
+    PROVIDE(__kernel_end = _bss_end);
 }

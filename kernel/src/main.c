@@ -1,6 +1,8 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdarg.h>
+
 #include <limine.h>
 
 #include "font8x8.h"
@@ -107,9 +109,54 @@ hcf(void)
 
 #define PAGE_SIZE 4096
 
-#define PAGE_TABLE_ENTRY_COUNT 512
+#define PTL4_ENTRY_COUNT 512
+#define PTL3_ENTRY_COUNT 512
+#define PTL2_ENTRY_COUNT 512
+#define PTL1_ENTRY_COUNT 512
 
-#define HUGE_PAGE (1ULL << 7)
+#define PAGE_PRESENT (1ULL << 0)
+#define PAGE_RW (1ULL << 1)
+#define PAGE_PS (1ULL << 7)
+
+typedef struct
+{
+  uint64_t entry;
+} ptl1e_t;
+
+typedef struct
+{
+  uint64_t entry;
+} ptl2e_t;
+
+typedef struct
+{
+  uint64_t entry;
+} ptl3e_t;
+
+typedef struct
+{
+  uint64_t entry;
+} ptl4e_t;
+
+typedef struct __attribute__((aligned(PAGE_SIZE)))
+{
+  ptl1e_t table[PTL1_ENTRY_COUNT];
+} ptl1_t;
+
+typedef struct __attribute__((aligned(PAGE_SIZE)))
+{
+  ptl2e_t table[PTL2_ENTRY_COUNT];
+} ptl2_t;
+
+typedef struct __attribute__((aligned(PAGE_SIZE)))
+{
+  ptl3e_t table[PTL3_ENTRY_COUNT];
+} ptl3_t;
+
+typedef struct __attribute__((aligned(PAGE_SIZE)))
+{
+  ptl4e_t table[PTL4_ENTRY_COUNT];
+} ptl4_t;
 
 enum memmap_region_type
 {
@@ -152,7 +199,11 @@ static struct memmap memmap;
 
 static struct free_list_node *free_list[MAX_ORDER + 1];
 
-static uintptr_t *pml4;
+static ptl4_t *kernel_ptl4;
+
+extern uintptr_t __kernel_start;
+extern uintptr_t __kernel_end;
+extern uintptr_t __kernel_base;
 
 static void
 draw_char(int x, int y, char c, uint32_t color)
@@ -213,6 +264,224 @@ puts(const char *s)
   while (*s)
   {
     putc(*s++);
+  }
+}
+
+static void
+early_print(const char *fmt, ...)
+{
+  va_list args;
+  va_start(args, fmt);
+
+  for (const char *p = fmt; *p; p++)
+  {
+    if (*p == '%')
+    {
+      p++;
+      int is_long = 0;
+
+      if (*p == 'l')
+      {
+        is_long = 1;
+        p++;
+      }
+
+      switch (*p)
+      {
+        case 's':
+          {
+            char *str = va_arg(args, char *);
+            for (; *str; str++)
+            {
+              putc(*str);
+            }
+
+            break;
+          }
+        case 'd':
+          {
+            if (is_long)
+            {
+              long num = va_arg(args, long);
+              if (num < 0)
+              {
+                putc('-');
+                num = -num;
+              }
+              char buf[30];
+              int i = 0;
+              if (num == 0)
+              {
+                buf[i++] = '0';
+              }
+              while (num > 0)
+              {
+                buf[i++] = '0' + (num % 10);
+                num /= 10;
+              }
+              while (i--)
+              {
+                putc(buf[i]);
+              }
+            }
+            else
+            {
+              int num = va_arg(args, int);
+              if (num < 0)
+              {
+                putc('-');
+                num = -num;
+              }
+              char buf[20];
+              int i = 0;
+              if (num == 0)
+              {
+                buf[i++] = '0';
+              }
+              while (num > 0)
+              {
+                buf[i++] = '0' + (num % 10);
+                num /= 10;
+              }
+              while (i--)
+              {
+                putc(buf[i]);
+              }
+            }
+
+            break;
+          }
+        case 'u':
+          {
+            if (is_long)
+            {
+              unsigned long num = va_arg(args, unsigned long);
+              char buf[30];
+              int i = 0;
+              if (num == 0)
+              {
+                buf[i++] = '0';
+              }
+              while (num > 0)
+              {
+                buf[i++] = '0' + (num % 10);
+                num /= 10;
+              }
+              while (i--)
+              {
+                putc(buf[i]);
+              }
+            }
+            else
+            {
+              unsigned int num = va_arg(args, unsigned int);
+              char buf[20];
+              int i = 0;
+              if (num == 0)
+              {
+                buf[i++] = '0';
+              }
+              while (num > 0)
+              {
+                buf[i++] = '0' + (num % 10);
+                num /= 10;
+              }
+              while (i--)
+              {
+                putc(buf[i]);
+              }
+            }
+
+            break;
+          }
+        case 'x':
+          {
+            putc('0');
+            putc('x');
+            if (is_long)
+            {
+              unsigned long num = va_arg(args, unsigned long);
+              char buf[16];
+              int i = 0;
+              if (num == 0)
+              {
+                buf[i++] = '0';
+              }
+              while (num > 0)
+              {
+                uint8_t digit = num & 0xF;
+                buf[i++] = (digit < 10) ? ('0' + digit) : ('a' + digit - 10);
+                num >>= 4;
+              }
+              while (i--)
+              {
+                putc(buf[i]);
+              }
+            }
+            else
+            {
+              unsigned int num = va_arg(args, unsigned int);
+              char buf[8];
+              int i = 0;
+              if (num == 0)
+              {
+                buf[i++] = '0';
+              }
+              while (num > 0)
+              {
+                uint8_t digit = num & 0xF;
+                buf[i++] = (digit < 10) ? ('0' + digit) : ('a' + digit - 10);
+                num >>= 4;
+              }
+              while (i--)
+              {
+                putc(buf[i]);
+              }
+            }
+
+            break;
+          }
+        case 'c':
+          {
+            char c = (char)va_arg(args, int);
+            putc(c);
+            break;
+          }
+        case 'p':
+          {
+            uint64_t ptr = (uint64_t)va_arg(args, void *);
+            putc('0');
+            putc('x');
+            char buf[16];
+            int i = 0;
+            if (ptr == 0)
+            {
+              putc('0');
+            }
+            else
+            {
+              while (ptr > 0)
+              {
+                uint8_t digit = ptr & 0xF;
+                buf[i++] = (digit < 10) ? ('0' + digit) : ('a' + digit - 10);
+                ptr >>= 4;
+              }
+              while (i--)
+              {
+                putc(buf[i]);
+              }
+            }
+
+            break;
+          }
+        case '%':
+          putc('%');
+          break;
+        default:
+          putc('?');
+          break;
+      }
+    }
   }
 }
 
@@ -389,7 +658,7 @@ free_range(void *base, void *end)
     size_t remaining = e - p;
     size_t order = MAX_ORDER;
 
-    while (order > 0 && ((size_t)PAGE_SIZE << order > remaining || (p & ((size_t)PAGE_SIZE << order) - 1) != 0))
+    while (order > 0 && ((size_t)PAGE_SIZE << order > remaining || (p & (((size_t)PAGE_SIZE << order) - 1)) != 0))
     {
       order--;
     }
@@ -465,84 +734,109 @@ kalloc_early(size_t order)
   hcf();
 }
 
-static uintptr_t
-clear_pte_flags(uintptr_t pte)
+static ptl3_t*
+walk_ptl4(ptl4_t *ptl4, uint64_t index, int create)
 {
-  return pte & ~0xFFF;
+  if (!(ptl4->table[index].entry & PAGE_PRESENT))
+  {
+    if (!create)
+    {
+      return 0;
+    }
+
+    void *new_page = kalloc_early(0);
+    memset(new_page, 0, PAGE_SIZE);
+    ptl4->table[index].entry = v2p(new_page) | PAGE_PRESENT | PAGE_RW;
+  }
+
+  return p2v(ptl4->table[index].entry & ~0xFFF);
 }
 
-static uintptr_t
-pte_flags(uintptr_t pte)
+static ptl2_t *
+walk_ptl3(ptl3_t *ptl3, uint64_t index, int create)
 {
-  return pte & 0xFFF;
+  if (!(ptl3->table[index].entry & PAGE_PRESENT))
+  {
+    if (!create)
+    {
+      return 0;
+    }
+
+    void *new_page = kalloc_early(0);
+    memset(new_page, 0, PAGE_SIZE);
+    ptl3->table[index].entry = v2p(new_page) | PAGE_PRESENT | PAGE_RW;
+  }
+
+  return p2v(ptl3->table[index].entry & ~0xFFF);
+}
+
+static ptl1_t *
+walk_ptl2(ptl2_t *ptl2, uintptr_t index, int create)
+{
+  if (!(ptl2->table[index].entry & PAGE_PRESENT))
+  {
+    if (!create)
+    {
+      return 0;
+    }
+
+    void *new_page = kalloc_early(0);
+    memset(new_page, 0, PAGE_SIZE);
+    ptl2->table[index].entry = v2p(new_page) | PAGE_PRESENT | PAGE_RW;
+  }
+
+  return p2v(ptl2->table[index].entry & ~0xFFF);
 }
 
 static void
-vm_init(void)
+map_page(ptl4_t *l4, uintptr_t pa, uintptr_t va, uintptr_t flags)
 {
-  pml4 = kalloc_early(0);
+  uintptr_t l4_index = (va >> 39) & 0x1FF;
+  uintptr_t l3_index = (va >> 30) & 0x1FF;
+  uintptr_t l2_index = (va >> 21) & 0x1FF;
+  uintptr_t l1_index = (va >> 12) & 0x1FF;
 
-  uintptr_t old_pml4_entry;
-  asm ("mov %%cr3, %0" : "=r"(old_pml4_entry));
-  uintptr_t *old_pml4 = p2v(clear_pte_flags(old_pml4_entry));
+  ptl3_t *l3 = walk_ptl4(l4, l4_index, 1);
+  ptl2_t *l2 = walk_ptl3(l3, l3_index, 1);
+  ptl1_t *l1 = walk_ptl2(l2, l2_index, 1);
 
-  for (size_t i = 0; i < PAGE_TABLE_ENTRY_COUNT; i++)
+  l1->table[l1_index].entry = (pa & ~0xFFF) | (flags & 0xFFF);
+}
+
+static void
+switch_ptl4(ptl4_t *l4)
+{
+  asm ("mov %0, %%cr3" : :  "r"(v2p(l4)) : "memory");
+}
+
+static void
+create_kernel_page_table(void)
+{
+  kernel_ptl4 = kalloc_early(0);
+  memset(kernel_ptl4, 0, PAGE_SIZE);
+
+  for (uintptr_t i = 0; i < (2ULL << 30); i += PAGE_SIZE)
   {
-    if (old_pml4[i] == 0)
-    {
-      continue;
-    }
-
-    uintptr_t *old_pdpt = p2v(clear_pte_flags(old_pml4[i]));
-
-    uintptr_t *pdpt = kalloc_early(0);
-    memset(pdpt, 0, PAGE_SIZE);
-    pml4[i] = v2p(pdpt) | pte_flags(old_pml4[i]);
-
-    for (size_t j = 0; j < PAGE_TABLE_ENTRY_COUNT; j++)
-    {
-      if (old_pdpt[j] == 0)
-      {
-        continue;
-      }
-
-      if (old_pdpt[j] & HUGE_PAGE)
-      {
-        pdpt[j] = old_pdpt[j];
-        continue;
-      }
-
-      uintptr_t *old_pd = p2v(clear_pte_flags(old_pdpt[j]));
-
-      uintptr_t *pd = kalloc_early(0);
-      memset(pd, 0, PAGE_SIZE);
-      pdpt[j] = v2p(pd) | pte_flags(old_pdpt[j]);
-
-      for (size_t k = 0; k < PAGE_TABLE_ENTRY_COUNT; k++)
-      {
-        if (old_pd[k] == 0)
-        {
-          continue;
-        }
-
-        if (old_pd[k] & HUGE_PAGE)
-        {
-          pd[k] = old_pd[k];
-          continue;
-        }
-
-        uintptr_t *old_pt = p2v(clear_pte_flags(old_pd[k]));
-
-        uintptr_t *pt = kalloc_early(0);
-        memset(pt, 0, PAGE_SIZE);
-        pd[k] = v2p(pt) | pte_flags(old_pd[k]);
-
-        memcpy(pt, old_pt, sizeof(uintptr_t) * PAGE_TABLE_ENTRY_COUNT);
-      }
-    }
+    map_page(kernel_ptl4, i, (uintptr_t)p2v(i), PAGE_PRESENT | PAGE_RW);
   }
 
-  asm("mov %0, %%cr3" : : "r"(v2p(pml4) | pte_flags(old_pml4_entry)) : "memory");
+  for (uintptr_t i = (uintptr_t)&__kernel_start; i < (uintptr_t)&__kernel_end; i += PAGE_SIZE)
+  {
+    map_page(kernel_ptl4, i, (uintptr_t)p2v(i), PAGE_PRESENT | PAGE_RW);
+  }
+}
+
+static void
+mp_main(void)
+{
+}
+
+static void __attribute__((noreturn))
+ap_enter(void)
+{
+  mp_main();
+
+  hcf();
 }
 
 void
@@ -556,7 +850,10 @@ kmain(void)
 
   free_usable_regions();
 
-  vm_init();
+  create_kernel_page_table();
+  switch_ptl4(kernel_ptl4);
+
+  mp_main();
 
   hcf();
 }
