@@ -235,13 +235,17 @@ putc(char c)
 
   switch (c) {
     case '\n':
+    {
       cursor_y++;
       cursor_x = 0;
       break;
+    }
     default:
+    {
       draw_char(cursor_x * 8, cursor_y * 8, c, 0xFFFFFFFF);
       cursor_x = cursor_x + 1;
       break;
+    }
   }
 
   if (cursor_x >= framebuffer_width / FONT_CHAR_WIDTH)
@@ -289,197 +293,196 @@ early_print(const char *fmt, ...)
       switch (*p)
       {
         case 's':
+        {
+          char *str = va_arg(args, char *);
+          for (; *str; str++)
           {
-            char *str = va_arg(args, char *);
-            for (; *str; str++)
-            {
-              putc(*str);
-            }
-
-            break;
+            putc(*str);
           }
+          break;
+        }
         case 'd':
+        {
+          if (is_long)
           {
-            if (is_long)
+            long num = va_arg(args, long);
+            if (num < 0)
             {
-              long num = va_arg(args, long);
-              if (num < 0)
-              {
-                putc('-');
-                num = -num;
-              }
-              char buf[30];
-              int i = 0;
-              if (num == 0)
-              {
-                buf[i++] = '0';
-              }
-              while (num > 0)
-              {
-                buf[i++] = '0' + (num % 10);
-                num /= 10;
-              }
-              while (i--)
-              {
-                putc(buf[i]);
-              }
+              putc('-');
+              num = -num;
             }
-            else
+            char buf[30];
+            int i = 0;
+            if (num == 0)
             {
-              int num = va_arg(args, int);
-              if (num < 0)
-              {
-                putc('-');
-                num = -num;
-              }
-              char buf[20];
-              int i = 0;
-              if (num == 0)
-              {
-                buf[i++] = '0';
-              }
-              while (num > 0)
-              {
-                buf[i++] = '0' + (num % 10);
-                num /= 10;
-              }
-              while (i--)
-              {
-                putc(buf[i]);
-              }
+              buf[i++] = '0';
             }
-
-            break;
+            while (num > 0)
+            {
+              buf[i++] = '0' + (num % 10);
+              num /= 10;
+            }
+            while (i--)
+            {
+              putc(buf[i]);
+            }
           }
+          else
+          {
+            int num = va_arg(args, int);
+            if (num < 0)
+            {
+              putc('-');
+              num = -num;
+            }
+            char buf[20];
+            int i = 0;
+            if (num == 0)
+            {
+              buf[i++] = '0';
+            }
+            while (num > 0)
+            {
+              buf[i++] = '0' + (num % 10);
+              num /= 10;
+            }
+            while (i--)
+            {
+              putc(buf[i]);
+            }
+          }
+          break;
+        }
         case 'u':
+        {
+          if (is_long)
           {
-            if (is_long)
+            unsigned long num = va_arg(args, unsigned long);
+            char buf[30];
+            int i = 0;
+            if (num == 0)
             {
-              unsigned long num = va_arg(args, unsigned long);
-              char buf[30];
-              int i = 0;
-              if (num == 0)
-              {
-                buf[i++] = '0';
-              }
-              while (num > 0)
-              {
-                buf[i++] = '0' + (num % 10);
-                num /= 10;
-              }
-              while (i--)
-              {
-                putc(buf[i]);
-              }
+              buf[i++] = '0';
             }
-            else
+            while (num > 0)
             {
-              unsigned int num = va_arg(args, unsigned int);
-              char buf[20];
-              int i = 0;
-              if (num == 0)
-              {
-                buf[i++] = '0';
-              }
-              while (num > 0)
-              {
-                buf[i++] = '0' + (num % 10);
-                num /= 10;
-              }
-              while (i--)
-              {
-                putc(buf[i]);
-              }
+              buf[i++] = '0' + (num % 10);
+              num /= 10;
             }
-
-            break;
+            while (i--)
+            {
+              putc(buf[i]);
+            }
           }
+          else
+          {
+            unsigned int num = va_arg(args, unsigned int);
+            char buf[20];
+            int i = 0;
+            if (num == 0)
+            {
+              buf[i++] = '0';
+            }
+            while (num > 0)
+            {
+              buf[i++] = '0' + (num % 10);
+              num /= 10;
+            }
+            while (i--)
+            {
+              putc(buf[i]);
+            }
+          }
+          break;
+        }
         case 'x':
+        {
+          putc('0');
+          putc('x');
+          if (is_long)
           {
-            putc('0');
-            putc('x');
-            if (is_long)
-            {
-              unsigned long num = va_arg(args, unsigned long);
-              char buf[16];
-              int i = 0;
-              if (num == 0)
-              {
-                buf[i++] = '0';
-              }
-              while (num > 0)
-              {
-                uint8_t digit = num & 0xF;
-                buf[i++] = (digit < 10) ? ('0' + digit) : ('a' + digit - 10);
-                num >>= 4;
-              }
-              while (i--)
-              {
-                putc(buf[i]);
-              }
-            }
-            else
-            {
-              unsigned int num = va_arg(args, unsigned int);
-              char buf[8];
-              int i = 0;
-              if (num == 0)
-              {
-                buf[i++] = '0';
-              }
-              while (num > 0)
-              {
-                uint8_t digit = num & 0xF;
-                buf[i++] = (digit < 10) ? ('0' + digit) : ('a' + digit - 10);
-                num >>= 4;
-              }
-              while (i--)
-              {
-                putc(buf[i]);
-              }
-            }
-
-            break;
-          }
-        case 'c':
-          {
-            char c = (char)va_arg(args, int);
-            putc(c);
-            break;
-          }
-        case 'p':
-          {
-            uint64_t ptr = (uint64_t)va_arg(args, void *);
-            putc('0');
-            putc('x');
+            unsigned long num = va_arg(args, unsigned long);
             char buf[16];
             int i = 0;
-            if (ptr == 0)
+            if (num == 0)
             {
-              putc('0');
+              buf[i++] = '0';
             }
-            else
+            while (num > 0)
             {
-              while (ptr > 0)
-              {
-                uint8_t digit = ptr & 0xF;
-                buf[i++] = (digit < 10) ? ('0' + digit) : ('a' + digit - 10);
-                ptr >>= 4;
-              }
-              while (i--)
-              {
-                putc(buf[i]);
-              }
+              uint8_t digit = num & 0xF;
+              buf[i++] = (digit < 10) ? ('0' + digit) : ('a' + digit - 10);
+              num >>= 4;
             }
-
-            break;
+            while (i--)
+            {
+              putc(buf[i]);
+            }
           }
+          else
+          {
+            unsigned int num = va_arg(args, unsigned int);
+            char buf[8];
+            int i = 0;
+            if (num == 0)
+            {
+              buf[i++] = '0';
+            }
+            while (num > 0)
+            {
+              uint8_t digit = num & 0xF;
+              buf[i++] = (digit < 10) ? ('0' + digit) : ('a' + digit - 10);
+              num >>= 4;
+            }
+            while (i--)
+            {
+              putc(buf[i]);
+            }
+          }
+          break;
+        }
+        case 'c':
+        {
+          char c = (char)va_arg(args, int);
+          putc(c);
+          break;
+        }
+        case 'p':
+        {
+          uint64_t ptr = (uint64_t)va_arg(args, void *);
+          putc('0');
+          putc('x');
+          char buf[16];
+          int i = 0;
+          if (ptr == 0)
+          {
+            putc('0');
+          }
+          else
+          {
+            while (ptr > 0)
+            {
+              uint8_t digit = ptr & 0xF;
+              buf[i++] = (digit < 10) ? ('0' + digit) : ('a' + digit - 10);
+              ptr >>= 4;
+            }
+            while (i--)
+            {
+              putc(buf[i]);
+            }
+          }
+          break;
+        }
         case '%':
+        {
           putc('%');
           break;
+        }
         default:
+        {
           putc('?');
           break;
+        }
       }
     }
   }
@@ -537,35 +540,55 @@ load_memmap(void)
     switch (limine_memmap->entries[i]->type)
     {
       case LIMINE_MEMMAP_USABLE:
+      {
         memmap.regions[i].type = MEMMAP_REGION_USABLE;
         break;
+      }
       case LIMINE_MEMMAP_RESERVED:
+      {
         memmap.regions[i].type = MEMMAP_REGION_RESERVED;
         break;
+      }
       case LIMINE_MEMMAP_ACPI_RECLAIMABLE:
+      {
         memmap.regions[i].type = MEMMAP_REGION_ACPI_RECLAIMABLE;
         break;
+      }
       case LIMINE_MEMMAP_ACPI_NVS:
+      {
         memmap.regions[i].type = MEMMAP_REGION_ACPI_NVS;
         break;
+      }
       case LIMINE_MEMMAP_BAD_MEMORY:
+      {
         memmap.regions[i].type = MEMMAP_REGION_BAD_MEMORY;
         break;
+      }
       case LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE:
+      {
         memmap.regions[i].type = MEMMAP_REGION_BOOTLOADER_RECLAIMABLE;
         break;
+      }
       case LIMINE_MEMMAP_EXECUTABLE_AND_MODULES:
+      {
         memmap.regions[i].type = MEMMAP_REGION_EXECUTABLE_AND_MODULES;
         break;
+      }
       case LIMINE_MEMMAP_FRAMEBUFFER:
+      {
         memmap.regions[i].type = MEMMAP_REGION_FRAMEBUFFER;
         break;
+      }
       case LIMINE_MEMMAP_ACPI_TABLES:
+      {
         memmap.regions[i].type = MEMMAP_REGION_ACPI_TABLES;
         break;
+      }
       default: // This should cover all of limines possible types but in the case of an error we should stop
+      {
         puts("Invalid or unsupported region type in limine memmap\n");
         hcf();
+      }
     }
   }
 }
