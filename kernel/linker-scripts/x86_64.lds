@@ -15,10 +15,6 @@ PHDRS
     data PT_LOAD;
 }
 
-/* Define symbols for kernel mapping */
-PROVIDE(__kernel_start = .);
-PROVIDE(__kernel_base = 0xffffffff80000000);
-
 SECTIONS
 {
     /* We want to be placed in the topmost 2GiB of the address space, for optimisations */
@@ -26,6 +22,8 @@ SECTIONS
     /* Any address in this region will do, but often 0xffffffff80000000 is chosen as */
     /* that is the beginning of the region. */
     . = 0xffffffff80000000;
+
+    __kernel_offset = .;
 
     /* Define a section to contain the Limine requests and assign it to its own PHDR */
     .limine_requests : {
@@ -38,18 +36,18 @@ SECTIONS
     . = ALIGN(CONSTANT(MAXPAGESIZE));
 
     .text : {
-        _text_start = .;
+        __text_start = .;
         *(.text .text.*)
-        _text_end = .;
+        __text_end = .;
     } :text
 
     /* Move to the next memory page for .rodata */
     . = ALIGN(CONSTANT(MAXPAGESIZE));
 
     .rodata : {
-        _rodata_start = .;
+        __rodata_start = .;
         *(.rodata .rodata.*)
-        _rodata_end = .;
+        __rodata_end = .;
     } :rodata
 
     /* Add a .note.gnu.build-id output section in case a build ID flag is added to the */
@@ -62,9 +60,8 @@ SECTIONS
     . = ALIGN(CONSTANT(MAXPAGESIZE));
 
     .data : {
-        _data_start = .;
+        __data_start = .;
         *(.data .data.*)
-        _data_end = .;
     } :data
 
     /* NOTE: .bss needs to be the last thing mapped to :data, otherwise lots of */
@@ -72,9 +69,10 @@ SECTIONS
     /* If you need, for example, .init_array and .fini_array, those should be placed */
     /* above this. */
     .bss : {
+        __bss_start = .;
         *(.bss .bss.*)
         *(COMMON)
-        _bss_end = .;
+        __bss_end = .;
     } :data
 
     /* Discard .note.* and .eh_frame* since they may cause issues on some hosts. */
@@ -82,6 +80,4 @@ SECTIONS
         *(.eh_frame*)
         *(.note .note.*)
     }
-
-    PROVIDE(__kernel_end = _bss_end);
 }
