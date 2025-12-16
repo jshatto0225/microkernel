@@ -95,9 +95,10 @@ int memcmp(const void *s1, const void *s2, size_t n) {
     return 0;
 }
 
-static void __attribute((noreturn)) hcf(void) {
+__attribute__((noreturn))
+static void hcf(void) {
     for (;;)
-        asm volatile ("hlt");
+        asm volatile ("hlt");   
 }
 
 #define MAX_MEMMAP_REGIONS 64
@@ -118,23 +119,35 @@ static void __attribute((noreturn)) hcf(void) {
 #define MAX_IOAPICS 4
 #define MAX_LAPICS 1
 
-#define LAPIC_SPURIOUS_INTERRUPT_VECTOR (0x00F0 / 4)
-#define LAPIC_ENABLE 0x00000100
-#define LAPIC_TIMER_DIVIDE_CONFIGURATION (0x03E0 / 4)
-#define LAPIC_TIMER_DIVIDE_CONFIGURATION_X1 0x0000000B
-#define LAPIC_TIMER (0x0320 / 4)
-#define LAPIC_PERIODIC 0x00020000
-#define LAPIC_TIMER_INITIAL_COUNT (0x0380 / 4)
-#define LAPIC_LINE_INTERRUPT_0 (0x0350 / 4)
-#define LAPIC_LINE_INTERRUPT_1 (0x0360 / 4)
-#define LAPIC_MASKED 0x00010000
-#define LAPIC_VERSION (0x0030 / 4)
-#define LAPIC_PERFORMANCE_COUNTER (0x0340 / 4)
-#define LAPIC_ERROR (0x0370 / 4)
-#define LAPIC_ERROR_STATUS (0x0280 / 4)
-#define LAPIC_END_OF_INTERRUPT (0x00B0 / 4)
-#define LAPIC_TASK_PRIORITY (0x0080 / 4)
-#define LAPIC_ID (0x0020 / 4)
+#define APIC_ID      (0x0020/4)   // ID
+#define APIC_VER     (0x0030/4)   // Version
+#define APIC_TPR     (0x0080/4)   // Task Priority
+#define APIC_EOI     (0x00B0/4)   // EOI
+#define APIC_SVR     (0x00F0/4)   // Spurious Interrupt Vector
+  #define APIC_ENABLE     0x00000100   // Unit Enable
+#define APIC_ESR     (0x0280/4)   // Error Status
+#define APIC_ICRLO   (0x0300/4)   // Interrupt Command
+  #define APIC_INIT       0x00000500   // INIT/RESET
+  #define APIC_STARTUP    0x00000600   // Startup IPI
+  #define APIC_DELIVS     0x00001000   // Delivery status
+  #define APIC_ASSERT     0x00004000   // Assert interrupt (vs deassert)
+  #define APIC_DEASSERT   0x00000000
+  #define APIC_LEVEL      0x00008000   // Level triggered
+  #define APIC_BCAST      0x00080000   // Send to all APICs, including self.
+  #define APIC_BUSY       0x00001000
+  #define APIC_FIXED      0x00000000
+#define APIC_ICRHI   (0x0310/4)   // Interrupt Command [63:32]
+#define APIC_TIMER   (0x0320/4)   // Local Vector Table 0 (TIMER)
+  #define APIC_X1         0x0000000B   // divide counts by 1
+  #define APIC_PERIODIC   0x00020000   // Periodic
+#define APIC_PCINT   (0x0340/4)   // Performance Counter LVT
+#define APIC_LINT0   (0x0350/4)   // Local Vector Table 1 (LINT0)
+#define APIC_LINT1   (0x0360/4)   // Local Vector Table 2 (LINT1)
+#define APIC_ERROR   (0x0370/4)   // Local Vector Table 3 (ERROR)
+  #define APIC_MASKED     0x00010000   // Interrupt masked
+#define APIC_TICR    (0x0380/4)   // Timer Initial Count
+#define APIC_TCCR    (0x0390/4)   // Timer Current Count
+#define APIC_TDCR    (0x03E0/4)   // Timer Divide Configuration
 
 #define TRAP_DIVIDE 0
 #define TRAP_DEBUG 1
@@ -158,6 +171,14 @@ static void __attribute((noreturn)) hcf(void) {
 #define TRAP_DEFAULT 500
 #define TRAP_IRQ0 32
 
+#define DPL_USER 0x3
+#define STA_X 0x8
+#define STA_W 0x2
+#define STA_R 0x2
+#define STS_T32A 0x9
+#define STS_IG64 0xE
+#define STS_TG64 0xF
+
 #define IRQ_TIMER 0
 #define IRQ_KBD 1
 #define IRQ_COM1 4
@@ -172,6 +193,13 @@ static void __attribute((noreturn)) hcf(void) {
 #define IOAPIC_IO_REG_SELECT 0
 #define IOAPIC_IO_DATA 4
 
+#define SEG_KCODE 1
+#define SEG_KDATA 2
+#define SEG_UCODE 3
+#define SEG_UDATA 4
+#define SEG_TSS 5
+
+#define INTERRUPT_COUNT 256
 
 typedef struct {
     u64 entry;
@@ -330,12 +358,55 @@ struct gdt_entry {
 };
 
 __attribute__((packed))
-struct gdt_ptr {
-    u16 limit;
-    u64 base;
+struct idt_gate {
+    u64 off_15_0 : 16;   // low 16 bits of offset in segment
+    u64 cs : 16;         // code segment selector
+    u64 args : 5;        // # args, 0 for interrupt/trap gates
+    u64 rsv1 : 3;        // reserved(should be zero I guess)
+    u64 type : 4;        // type(STS_{IG32,TG32})
+    u64 s : 1;           // must be 0 (system)
+    u64 dpl : 2;         // descriptor(meaning new) privilege level
+    u64 p : 1;           // Present
+    u64 off_31_16 : 16;  // high bits of offset in segment
+    u64 off_32_63 : 32;
+    u64 reserved : 32;
+};
+
+struct trap_frame {
+    /* ---- software-pushed (by isr_common) ---- */
+    u64 r15;
+    u64 r14;
+    u64 r13;
+    u64 r12;
+    u64 r11;
+    u64 r10;
+    u64 r9;
+    u64 r8;
+    u64 rdi;
+    u64 rsi;
+    u64 rbp;
+    u64 rbx;
+    u64 rdx;
+    u64 rcx;
+    u64 rax;
+
+    /* pushed by vector stub */
+    u64 vector;
+    u64 error;
+
+    /* ---- pushed automatically by CPU ---- */
+    u64 rip;
+    u64 cs;
+    u64 rflags;
+
+    /* only present if CPL change (user → kernel) */
+    u64 rsp;
+    u64 ss;
 };
 
 static struct gdt_entry gdt[3];
+
+static struct idt_gate idt[INTERRUPT_COUNT];
 
 static volatile u32 *framebuffer;
 static int framebuffer_width;
@@ -359,6 +430,8 @@ extern char __data_end[];
 extern char __bss_start[];
 extern char __bss_end[];
 
+extern uintptr_t trap_vectors[];
+
 static volatile u32 *lapic;
 
 static size_t ioapic_count;
@@ -367,8 +440,50 @@ static struct ioapic ioapics[MAX_IOAPICS];
 static size_t lapic_count;
 static struct lapic lapics[MAX_LAPICS];
 
+static  void reset_segment_registers(void) {
+  asm volatile(
+      "mov $0x10, %%ax\n"
+      "mov %%ax, %%ds\n"
+      "mov %%ax, %%es\n"
+      "mov %%ax, %%ss\n"
+      "mov %%ax, %%fs\n"
+      "mov %%ax, %%gs\n"
+      "pushq $0x08\n"
+      "leaq 1f(%%rip), %%rax\n"
+      "pushq %%rax\n"
+      "lretq\n"
+      "1:\n"
+      : : : "rax", "memory");
+}
+
 static void outb(u16 port, u8 val) {
     asm volatile("outb %0, %1" : : "a"(val), "Nd"(port));
+}
+
+static void lidt(void *base, u16 size) {
+    struct {
+        u16 len;
+        void *base;
+    } __attribute__((packed)) idt = { size - 1, base };
+
+    asm volatile ("lidt %0" : : "m"(idt));
+}
+
+static void lgdt(void *base, u16 size) {
+    struct {
+        u16 limit;
+        void *base;
+    } __attribute__((packed)) gdt = { size - 1, base };
+
+    asm volatile ("lgdt %0" : : "m"(gdt));
+}
+
+static void sti(void) {
+    asm volatile ("sti");
+}
+
+static void cli(void) {
+    asm volatile ("cli");
 }
 
 static void draw_char(int x, int y, char c, u32 color) {
@@ -396,6 +511,7 @@ static void putc(char c) {
             break;
         }
         default: {
+            outb(0x3F8, c);
             draw_char(cursor_x * 8, cursor_y * 8, c, 0xFFFFFFFF);
             cursor_x = cursor_x + 1;
             break;
@@ -834,7 +950,7 @@ static void load_apic(void) {
         rsdt_parse((struct acpi_rsdt *)p2v(rsdp->rsdt_addr));
 }
 
-void gdt_set_entry(int num, u32 base, u32 limit, u8 access, u8 gran) {
+static void gdt_set_entry(int num, u32 base, u32 limit, u8 access, u8 gran) {
     gdt[num].base_low = base & 0xFFFF;
     gdt[num].base_middle = (base >> 16) & 0xFF;
     gdt[num].base_high = (base >> 24) & 0xFF;
@@ -847,12 +963,28 @@ void gdt_set_entry(int num, u32 base, u32 limit, u8 access, u8 gran) {
 }
 
 static void init_gdt(void) {
+    // Null entry
+    gdt_set_entry(0, 0, 0, 0, 0);
     
+    // Kernel code segment (index 1)
+    gdt_set_entry(SEG_KCODE, 0, 0xFFFFF, 0x9A, 0xAF);
+    
+    // Kernel data segment (index 2)
+    gdt_set_entry(SEG_KDATA, 0, 0xFFFFF, 0x92, 0xAF);
+    
+    // User code segment (index 3)
+    gdt_set_entry(SEG_UCODE, 0, 0xFFFFF, 0xFA, 0xAF);
+    
+    // User data segment (index 4)
+    gdt_set_entry(SEG_UDATA, 0, 0xFFFFF, 0xF2, 0xAF);
+    
+    lgdt(gdt, sizeof(gdt));
+    reset_segment_registers(); // <- this guys a loser
 }
 
 static void lapicw(size_t index, int value) {
     lapic[index] = value;
-    (void)lapic[LAPIC_ID];
+    (void)lapic[APIC_ID];
 }
 
 static void init_lapic(void) {
@@ -863,26 +995,26 @@ static void init_lapic(void) {
 
     map_page(kernel_ptl4, v2p((uintptr_t)lapic), (uintptr_t)lapic, PAGE_P | PAGE_RW);
     
-    lapicw(LAPIC_SPURIOUS_INTERRUPT_VECTOR, LAPIC_ENABLE | (TRAP_IRQ0 + IRQ_SPURIOUS));
+    lapicw(APIC_SVR, APIC_ENABLE | (TRAP_IRQ0 + IRQ_SPURIOUS));
 
-    lapicw(LAPIC_TIMER_DIVIDE_CONFIGURATION, LAPIC_TIMER_DIVIDE_CONFIGURATION_X1);
-    lapicw(LAPIC_TIMER, LAPIC_PERIODIC | (TRAP_IRQ0 + IRQ_TIMER));
-    lapicw(LAPIC_TIMER_INITIAL_COUNT, 10000000);
+    lapicw(APIC_TDCR, APIC_X1);
+    lapicw(APIC_TIMER, APIC_PERIODIC | (TRAP_IRQ0 + IRQ_TIMER));
+    lapicw(APIC_TICR, 10000000);
 
-    lapicw(LAPIC_LINE_INTERRUPT_0, LAPIC_MASKED);
-    lapicw(LAPIC_LINE_INTERRUPT_1, LAPIC_MASKED);
+    lapicw(APIC_LINT0, APIC_MASKED);
+    lapicw(APIC_LINT1, APIC_MASKED);
 
-    if (((lapic[LAPIC_VERSION] >> 16) & 0xFF) >= 4)
-        lapicw(LAPIC_PERFORMANCE_COUNTER, LAPIC_MASKED);
+    if (((lapic[APIC_VER] >> 16) & 0xFF) >= 4)
+        lapicw(APIC_PCINT, APIC_MASKED);
 
-    lapicw(LAPIC_ERROR, TRAP_IRQ0 + IRQ_ERROR);
+    lapicw(APIC_ERROR, TRAP_IRQ0 + IRQ_ERROR);
 
-    lapicw(LAPIC_ERROR_STATUS, 0);
-    lapicw(LAPIC_ERROR_STATUS, 0);
+    lapicw(APIC_ESR, 0);
+    lapicw(APIC_ESR, 0);
 
-    lapicw(LAPIC_END_OF_INTERRUPT, 0);
+    lapicw(APIC_EOI, 0);
 
-    lapicw(LAPIC_TASK_PRIORITY, 0);
+    lapicw(APIC_TPR, 0);
 }
 
 static void init_pic(void) {
@@ -923,9 +1055,83 @@ static void init_ioapic(void) {
     }
 }
 
+static void init_idt(void) {
+    lidt(idt, sizeof(idt));
+}
+
+#define set_gate(gate, istrap, sel, off, d)                             \
+    {                                                                   \
+        (gate).off_15_0 = (uintptr_t)(off) & 0xffff;                    \
+        (gate).cs = (sel);                                              \
+        (gate).args = 0;                                                \
+        (gate).rsv1 = 0;                                                \
+        (gate).type = (istrap) ? STS_TG64 : STS_IG64;                   \
+        (gate).s = 0;                                                   \
+        (gate).dpl = (d);                                               \
+        (gate).p = 1;                                                   \
+        (gate).off_31_16 = (uintptr_t)(off) >> 16 & 0xffff;             \
+        (gate).off_32_63 = (uintptr_t)(off) >> 32 & 0xffffffff;         \
+    }
+
+static void init_tv(void) {
+    for (u64 i = 0; i < INTERRUPT_COUNT; i++)
+        set_gate(idt[i], 0, SEG_KCODE << 3, trap_vectors[i], 0);
+    set_gate(idt[TRAP_SYSCALL], 1, SEG_KCODE << 3, trap_vectors[TRAP_SYSCALL], DPL_USER);
+}
+
+static void lapic_eoi(void) {
+    if (lapic)
+        lapicw(APIC_EOI, 0);
+}
+
+volatile u64 ticks = 0;
+
+void trap(struct trap_frame *tf) {
+    switch (tf->vector) {
+        case TRAP_IRQ0 + IRQ_TIMER:
+            ticks++;
+            if (ticks % 100 == 0)
+                puts("Timer!\n");
+            lapic_eoi();
+            return;
+        case TRAP_GENERAL_PROTECTION_FAULT:
+            puts("GPF: ");
+            puthex(tf->error);
+            puts("\n");
+            puts("ss: ");
+            puthex(tf->ss);
+            puts("\n");
+            puts("cs: ");
+            puthex(tf->cs);
+            puts("\n");
+            puts("rip: ");
+            puthex(tf->rip);
+            puts("\n");
+            puts("rflags: ");
+            puthex(tf->rflags);
+            puts("\n");
+            hcf();
+        default:
+            puts("Unhandled Trap vector: ");
+            puthex(tf->vector);
+            puts(", error: ");
+            puthex(tf->error);
+            puts("\n");
+            hcf();
+    }
+
+    puts("vector: ");
+    puthex(tf->vector);
+    puts(", error: ");
+    puthex(tf->error);
+    puts("\n");
+    hcf();
+}
+
 static void mp_main(void) {
-//    init_idt();
+    init_idt();
 //    init_sched();
+    sti();
 }
 
 __attribute__((noreturn))
@@ -948,10 +1154,10 @@ void kmain(void) {
 //    init_mp();
     init_paging();
     init_lapic();
-//    init_gdt();
+    init_gdt();
     init_pic();
     init_ioapic();
-//    init_tv();
+    init_tv();
 
     mp_main();
 
