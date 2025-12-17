@@ -39,12 +39,10 @@ static volatile struct limine_rsdp_request rsdp_request = {
     .revision = 0
 };
 
-__attribute__((used, section(".limine_requests")))
-static volatile u64 limine_base_revision[] = LIMINE_BASE_REVISION(4);
-__attribute__((used, section(".limine_requests_start")))
-static volatile u64 limine_requests_start_marker[] = LIMINE_REQUESTS_START_MARKER;
-__attribute__((used, section(".limine_requests_end")))
-static volatile u64 limine_requests_end_marker[] = LIMINE_REQUESTS_END_MARKER;
+// ARCH_X86_64
+__attribute__((used, section(".limine_requests"))) static volatile u64 limine_base_revision[] = LIMINE_BASE_REVISION(4);
+__attribute__((used, section(".limine_requests_start"))) static volatile u64 limine_requests_start_marker[] = LIMINE_REQUESTS_START_MARKER;
+__attribute__((used, section(".limine_requests_end"))) static volatile u64 limine_requests_end_marker[] = LIMINE_REQUESTS_END_MARKER;
 
 void *memcpy(void *restrict dest, const void *restrict src, size_t n) {
     u8 *restrict pdest = (uint8_t *restrict)dest;
@@ -93,8 +91,7 @@ int memcmp(const void *s1, const void *s2, size_t n) {
     return 0;
 }
 
-__attribute__((noreturn))
-static void hcf(void) {
+static __attribute__((noreturn)) void hcf(void) {
     for (;;)
         asm volatile ("hlt");
 }
@@ -201,41 +198,35 @@ static void hcf(void) {
 
 #define COM1 0x3F8
 
+// ARCH_X86_64
 typedef struct {
     u64 entry;
 } ptl1e_t;
-
 typedef struct {
     u64 entry;
 } ptl2e_t;
-
 typedef struct {
     u64 entry;
 } ptl3e_t;
-
 typedef struct {
     u64 entry;
 } ptl4e_t;
 
-__attribute__((aligned(PAGE_SIZE)))
 typedef struct {
     ptl1e_t table[PTL1_ENTRY_COUNT];
-} ptl1_t;
+} __attribute__((aligned(PAGE_SIZE))) ptl1_t;
 
-__attribute__((aligned(PAGE_SIZE)))
 typedef struct {
     ptl2e_t table[PTL2_ENTRY_COUNT];
-} ptl2_t;
+} __attribute__((aligned(PAGE_SIZE))) ptl2_t;
 
-__attribute__((aligned(PAGE_SIZE)))
 typedef struct {
     ptl3e_t table[PTL3_ENTRY_COUNT];
-} ptl3_t;
+} __attribute__((aligned(PAGE_SIZE))) ptl3_t;
 
-__attribute__((aligned(PAGE_SIZE)))
 typedef struct {
     ptl4e_t table[PTL4_ENTRY_COUNT];
-} ptl4_t;
+} __attribute__((aligned(PAGE_SIZE))) ptl4_t;
 
 enum memmap_region_type {
     MEMMAP_REGION_USABLE = 0,
@@ -264,7 +255,8 @@ struct free_list_node {
     struct free_list_node *next;
 };
 
-struct __attribute__((packed)) acpi_sdt_header {
+// ARCH_X86_64
+struct acpi_sdt_header {
     char signature[4];
     u32 length;
     u8 revision;
@@ -274,9 +266,10 @@ struct __attribute__((packed)) acpi_sdt_header {
     u32 oem_revision;
     u32 creator_id;
     u32 creator_revision;
-};
+} __attribute__((packed));
 
-struct __attribute__((packed)) acpi_rsdp {
+// ARCH_X86_64
+struct acpi_rsdp {
     char signature[8];
     u8 checksum;
     char oemid[6];
@@ -286,84 +279,94 @@ struct __attribute__((packed)) acpi_rsdp {
     u64 xsdt_addr;
     u8 extended_checksum;
     u8 reserved[3];
-};
+} __attribute__((packed));
 
-struct __attribute__((packed)) acpi_xsdt {
+// ARCH_X86_64
+struct acpi_xsdt {
     struct acpi_sdt_header header;
     u64 entries[];
-};
+} __attribute__((packed));
 
-struct __attribute__((packed)) acpi_madt {
+// ARCH_X86_64
+struct acpi_madt {
     struct acpi_sdt_header header;
     u32 lapic_addr;
     u32 flags;
     u8 entries[];
-};
+} __attribute__((packed));
 
-struct __attribute__((packed)) acpi_rsdt {
+// ARCH_X86_64
+struct acpi_rsdt {
     struct acpi_sdt_header header;
     u32 entries[];
-};
+} __attribute__((packed));
 
+// ARCH_X86_64
 enum {
     MADT_LAPIC = 0,
     MADT_IOAPIC = 1,
     MADT_OVERRIDE = 2
 };
 
-struct __attribute__((packed)) madt_ioapic_entry {
+// ARCH_X86_64
+struct madt_ioapic_entry {
     u8 type;
     u8 length;
     u8 ioapic_id;
     u8 reserved;
     u32 ioapic_addr;
     u32 gsi_base;
-};
+} __attribute__((packed));
 
-struct __attribute__((packed)) madt_lapic_entry {
+// ARCH_X86_64
+struct madt_lapic_entry {
     u8 type;
     u8 length;
     u8 cpu_id;
     u8 apic_id;
     u32 flags;
-};
+} __attribute__((packed));
 
+// ARCH_X86_64
 struct ioapic {
     u8 id;
     volatile u32 *addr;
     u32 gsi_base;
 };
 
+// ARCH_X86_64
 struct lapic {
     u8 cpu_id;
     u8 apic_id;
     u32 flags;
 };
 
-struct __attribute__((packed)) gdt_entry {
+// ARCH_X86_64
+struct gdt_entry {
     u16 limit_low;
     u16 base_low;
     u8 base_middle;
     u8 access;
     u8 granularity;
     u8 base_high;
-};
+} __attribute__((packed));
 
+// ARCH_X86_64
+struct idt_gate {
+    u16 off_15_0;   // low 16 bits of offset in segment
+    u16 cs;         // code segment selector
+    u8 args : 5;    // # args, 0 for interrupt/trap gates
+    u8 rsv1 : 3;    // reserved(should be zero I guess)
+    u8 type : 4;    // type(STS_{IG32,TG32})
+    u8 s : 1;       // must be 0 (system)
+    u8 dpl : 2;     // descriptor(meaning new) privilege level
+    u8 p : 1;       // Present
+    u16 off_31_16;  // mid bits of offset in segment
+    u32 off_32_63;  // hi bits of offset in segment
+    u32 reserved;
+} __attribute__((packed));
 
-struct __attribute__((packed)) idt_gate {
-    u64 off_15_0 : 16;   // low 16 bits of offset in segment
-    u64 cs : 16;         // code segment selector
-    u64 args : 5;        // # args, 0 for interrupt/trap gates
-    u64 rsv1 : 3;        // reserved(should be zero I guess)
-    u64 type : 4;        // type(STS_{IG32,TG32})
-    u64 s : 1;           // must be 0 (system)
-    u64 dpl : 2;         // descriptor(meaning new) privilege level
-    u64 p : 1;           // Present
-    u64 off_31_16 : 16;  // high bits of offset in segment
-    u64 off_32_63 : 32;
-    u64 reserved : 32;
-};
-
+// ARCH_X86_64
 struct trap_frame {
     /* ---- software-pushed (by isr_common) ---- */
     u64 r15;
@@ -394,7 +397,7 @@ struct trap_frame {
     /* only present if CPL change (user → kernel) */
     u64 rsp;
     u64 ss;
-};
+} __attribute__((packed));
 
 static struct gdt_entry gdt[5];
 
@@ -432,6 +435,7 @@ static struct ioapic ioapics[MAX_IOAPICS];
 static size_t lapic_count;
 static struct lapic lapics[MAX_LAPICS];
 
+// ARCH_X86_64
 static  void reset_segment_registers(void) {
   asm volatile(
       "mov $0x10, %%ax\n"
@@ -448,17 +452,19 @@ static  void reset_segment_registers(void) {
       : : : "rax", "memory");
 }
 
+// ARCH_X86_64
 static void outb(u16 port, u8 val) {
     asm volatile("outb %0, %1" : : "a"(val), "Nd"(port));
 }
 
+// ARCH_X86_64
 static u8 inb(u16 port) {
   u8 ret;
   asm volatile("inb %1, %0" : "=a"(ret) : "Nd"(port));
   return ret;
 }
 
-
+// ARCH_X86_64
 static void lidt(void *base, u16 size) {
     struct {
         u16 len;
@@ -468,6 +474,7 @@ static void lidt(void *base, u16 size) {
     asm volatile ("lidt %0" : : "m"(idt));
 }
 
+// ARCH_X86_64
 static void lgdt(void *base, u16 size) {
     struct {
         u16 limit;
@@ -477,14 +484,17 @@ static void lgdt(void *base, u16 size) {
     asm volatile ("lgdt %0" : : "m"(gdt));
 }
 
+// ARCH_X86_64
 static void sti(void) {
     asm volatile ("sti");
 }
 
+// ARCH_X86_64
 static void cli(void) {
     asm volatile ("cli");
 }
 
+// ARCH_X86_64
 static void init_serial(void) {
     outb(COM1 + 1, 0x00);
     outb(COM1 + 3, 0x80);
@@ -495,10 +505,12 @@ static void init_serial(void) {
     outb(COM1 + 4, 0x0B);
 }
 
+// ARCH_X86_64
 static int is_transmit_empty(void) {
     return inb(COM1 + 5) & 0x20;
 }
 
+// ARCH_X86_64
 static void serial_putc(char c) {
     while (!is_transmit_empty());
     outb(COM1, c);
@@ -600,7 +612,7 @@ static void early_printf(const char *fmt, ...) {
                     if (num == 0)
                         buf[i++] = '0';
                     while (num > 0) {
-                        uint8_t digit = num & 0xF;
+                        char digit = num & 0xF;
                         buf[i++] =
                             (digit < 10) ? ('0' + digit) : ('a' + digit - 10);
                         num >>= 4;
@@ -615,7 +627,7 @@ static void early_printf(const char *fmt, ...) {
                     if (num == 0)
                         buf[i++] = '0';
                     while (num > 0) {
-                        uint8_t digit = num & 0xF;
+                        char digit = num & 0xF;
                         buf[i++] =
                             (digit < 10) ? ('0' + digit) : ('a' + digit - 10);
                         num >>= 4;
@@ -631,7 +643,7 @@ static void early_printf(const char *fmt, ...) {
                 break;
             }
             case 'p': {
-                uint64_t ptr = (uint64_t)va_arg(args, void *);
+                uintptr_t ptr = (uintptr_t)va_arg(args, void *);
                 serial_putc('0');
                 serial_putc('x');
                 char buf[16];
@@ -640,7 +652,7 @@ static void early_printf(const char *fmt, ...) {
                     serial_putc('0');
                 } else {
                     while (ptr > 0) {
-                        uint8_t digit = ptr & 0xF;
+                        char digit = ptr & 0xF;
                         buf[i++] =
                             (digit < 10) ? ('0' + digit) : ('a' + digit - 10);
                         ptr >>= 4;
@@ -852,7 +864,8 @@ static void *early_kalloc(size_t order) {
     hcf();
 }
 
-static ptl3_t *walk_ptl4(ptl4_t *ptl4, u64 index, int create) {
+// ARCH_X86_64
+static ptl3_t *walk_ptl4(ptl4_t *ptl4, size_t index, int create) {
     if (!(ptl4->table[index].entry & PAGE_P)) {
         if (!create)
             return 0;
@@ -865,7 +878,8 @@ static ptl3_t *walk_ptl4(ptl4_t *ptl4, u64 index, int create) {
     return (ptl3_t *)p2v(ptl4->table[index].entry & ~0xFFF);
 }
 
-static ptl2_t *walk_ptl3(ptl3_t *ptl3, u64 index, int create) {
+// ARCH_X86_64
+static ptl2_t *walk_ptl3(ptl3_t *ptl3, size_t index, int create) {
     if (!(ptl3->table[index].entry & PAGE_P)) {
         if (!create)
             return 0;
@@ -878,7 +892,8 @@ static ptl2_t *walk_ptl3(ptl3_t *ptl3, u64 index, int create) {
     return (ptl2_t *)p2v(ptl3->table[index].entry & ~0xFFF);
 }
 
-static ptl1_t *walk_ptl2(ptl2_t *ptl2, uintptr_t index, int create) {
+// ARCH_X86_64
+static ptl1_t *walk_ptl2(ptl2_t *ptl2, size_t index, int create) {
     if (!(ptl2->table[index].entry & PAGE_P)) {
         if (!create)
             return 0;
@@ -891,6 +906,7 @@ static ptl1_t *walk_ptl2(ptl2_t *ptl2, uintptr_t index, int create) {
     return (ptl1_t *)p2v(ptl2->table[index].entry & ~0xFFF);
 }
 
+// ARCH_X86_64
 static void map_page_early(ptl4_t *l4, uintptr_t pa, uintptr_t va, uintptr_t flags) {
     uintptr_t l4_index = (va >> 39) & 0x1FF;
     uintptr_t l3_index = (va >> 30) & 0x1FF;
@@ -904,6 +920,7 @@ static void map_page_early(ptl4_t *l4, uintptr_t pa, uintptr_t va, uintptr_t fla
     l1->table[l1_index].entry = (pa & ~0xFFF) | (flags & 0xFFF);
 }
 
+// ARCH_X86_64
 static void switch_ptl4(ptl4_t *l4) {
     asm volatile ("mov %0, %%cr3" : :  "r"(v2p((uintptr_t)l4)) : "memory");
 }
@@ -946,6 +963,7 @@ static void init_paging(void) {
     switch_ptl4(kernel_ptl4);
 }
 
+// ARCH_X86_64
 static void madt_parse(struct acpi_madt *madt) {
     lapic = (volatile u32 *)p2v(madt->lapic_addr);
 
@@ -990,8 +1008,9 @@ static void madt_parse(struct acpi_madt *madt) {
     }
 }
 
+// ARCH_X86_64
 static void xsdt_parse(struct acpi_xsdt *xsdt) {
-    u64 entries = (xsdt->header.length - sizeof(xsdt->header)) / 8;
+    size_t entries = (xsdt->header.length - sizeof(xsdt->header)) / 8;
 
     for (size_t i = 0; i < entries; i++) {
         struct acpi_sdt_header *hdr = (struct acpi_sdt_header *)p2v(xsdt->entries[i]);
@@ -1008,8 +1027,9 @@ static void xsdt_parse(struct acpi_xsdt *xsdt) {
     hcf();
 }
 
+// ARCH_X86_64
 static void rsdt_parse(struct acpi_rsdt *rsdt) {
-    u64 entries = (rsdt->header.length - sizeof(rsdt->header)) / 8;
+    size_t entries = (rsdt->header.length - sizeof(rsdt->header)) / 8;
 
     for (size_t i = 0; i < entries; i++) {
         struct acpi_sdt_header *hdr = (struct acpi_sdt_header *)p2v(rsdt->entries[i]);
@@ -1026,6 +1046,7 @@ static void rsdt_parse(struct acpi_rsdt *rsdt) {
     hcf();
 }
 
+// ARCH_X86_64
 static void load_apic(void) {
     if (rsdp_request.response == NULL) {
         early_printf("No acpi present\n");
@@ -1038,6 +1059,7 @@ static void load_apic(void) {
         rsdt_parse((struct acpi_rsdt *)p2v(rsdp->rsdt_addr));
 }
 
+// ARCH_X86_64
 static void gdt_set_entry(int num, u32 base, u32 limit, u8 access, u8 gran) {
     gdt[num].base_low = base & 0xFFFF;
     gdt[num].base_middle = (base >> 16) & 0xFF;
@@ -1050,6 +1072,7 @@ static void gdt_set_entry(int num, u32 base, u32 limit, u8 access, u8 gran) {
     gdt[num].access = access;
 }
 
+// ARCH_X86_64
 static void init_gdt(void) {
     // Null entry
     gdt_set_entry(0, 0, 0, 0, 0);
@@ -1070,11 +1093,13 @@ static void init_gdt(void) {
     reset_segment_registers(); // <- this guys a loser
 }
 
+// ARCH_X86_64
 static void lapicw(size_t index, int value) {
     lapic[index] = value;
     (void)lapic[APIC_ID];
 }
 
+// ARCH_X86_64
 static void init_lapic(void) {
     if (!lapic) {
         early_printf("No lapic found\n");
@@ -1105,26 +1130,30 @@ static void init_lapic(void) {
     lapicw(APIC_TPR, 0);
 }
 
+// ARCH_X86_64
 static void init_pic(void) {
     // Disable
     outb(0x12, 0xFF);
     outb(0xA1, 0xFF);
 }
 
-static int ioapicread(u64 index, u32 reg) {
+// ARCH_X86_64
+static int ioapicread(size_t index, u32 reg) {
     volatile u32 *mmio = ioapics[index].addr;
     mmio[IOAPIC_IO_REG_SELECT] = reg;
     return mmio[IOAPIC_IO_DATA];
 }
 
-static void ioapicwrite(u64 index, u32 reg, u32 data) {
+// ARCH_X86_64
+static void ioapicwrite(size_t index, u32 reg, u32 data) {
     volatile u32 *mmio = ioapics[index].addr;
     mmio[IOAPIC_IO_REG_SELECT] = reg;
     mmio[IOAPIC_IO_DATA] = data;
 }
 
+// ARCH_X86_64
 static void init_ioapic(void) {
-    for (u64 i = 0; i < ioapic_count; i++) {
+    for (size_t i = 0; i < ioapic_count; i++) {
         map_page_early(kernel_ptl4, v2p((uintptr_t)ioapics[i].addr), (uintptr_t)ioapics[i].addr, PAGE_P | PAGE_RW);
 
         u32 id;
@@ -1136,17 +1165,19 @@ static void init_ioapic(void) {
             continue;
         }
 
-        for (u64 j = 0; j <= maxintr; j++) {
+        for (u32 j = 0; j <= maxintr; j++) {
             ioapicwrite(i, IOAPIC_REG_TABLE + 2 * j, IOAPIC_INT_DISABLED | (TRAP_IRQ0 + j));
             ioapicwrite(i, IOAPIC_REG_TABLE + 2 * j + 1, 0);
         }
     }
 }
 
+// ARCH_X86_64
 static void init_idt(void) {
     lidt(idt, sizeof(idt));
 }
 
+// ARCH_X86_64
 #define set_gate(gate, istrap, sel, off, d)                             \
     {                                                                   \
         (gate).off_15_0 = (uintptr_t)(off) & 0xffff;                    \
@@ -1161,25 +1192,23 @@ static void init_idt(void) {
         (gate).off_32_63 = (uintptr_t)(off) >> 32 & 0xffffffff;         \
     }
 
+// ARCH_X86_64
 static void init_tv(void) {
-    for (u64 i = 0; i < INTERRUPT_COUNT; i++)
+    for (size_t i = 0; i < INTERRUPT_COUNT; i++)
         set_gate(idt[i], 0, SEG_KCODE << 3, trap_vectors[i], 0);
     set_gate(idt[TRAP_SYSCALL], 1, SEG_KCODE << 3, trap_vectors[TRAP_SYSCALL], DPL_USER);
 }
 
+// ARCH_X86_64
 static void lapic_eoi(void) {
     if (lapic)
         lapicw(APIC_EOI, 0);
 }
 
-volatile u64 ticks = 0;
-
+// ARCH_X86_64
 void trap(struct trap_frame *tf) {
     switch (tf->vector) {
         case TRAP_IRQ0 + IRQ_TIMER:
-            ticks++;
-            if (ticks % 100 == 0)
-                early_printf("Timer!\n");
             lapic_eoi();
             return;
         case TRAP_GENERAL_PROTECTION_FAULT:
@@ -1197,8 +1226,7 @@ static void mp_main(void) {
     sti();
 }
 
-__attribute__((noreturn))
-static void ap_enter(void) {
+static __attribute__((noreturn)) void ap_enter(void) {
     mp_main();
 
     hcf();
