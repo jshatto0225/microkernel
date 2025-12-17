@@ -5,8 +5,6 @@
 
 #include <limine.h>
 
-#include "font8x8.h"
-
 typedef uint64_t u64;
 typedef uint32_t u32;
 typedef uint16_t u16;
@@ -98,7 +96,7 @@ int memcmp(const void *s1, const void *s2, size_t n) {
 __attribute__((noreturn))
 static void hcf(void) {
     for (;;)
-        asm volatile ("hlt");   
+        asm volatile ("hlt");
 }
 
 #define MAX_MEMMAP_REGIONS 64
@@ -266,8 +264,7 @@ struct free_list_node {
     struct free_list_node *next;
 };
 
-__attribute__((packed))
-struct acpi_sdt_header {
+struct __attribute__((packed)) acpi_sdt_header {
     char signature[4];
     u32 length;
     u8 revision;
@@ -279,8 +276,7 @@ struct acpi_sdt_header {
     u32 creator_revision;
 };
 
-__attribute__((packed))
-struct acpi_rsdp {
+struct __attribute__((packed)) acpi_rsdp {
     char signature[8];
     u8 checksum;
     char oemid[6];
@@ -292,22 +288,19 @@ struct acpi_rsdp {
     u8 reserved[3];
 };
 
-__attribute__((packed))
-struct acpi_xsdt {
+struct __attribute__((packed)) acpi_xsdt {
     struct acpi_sdt_header header;
     u64 entries[];
 };
 
-__attribute__((packed))
-struct acpi_madt {
+struct __attribute__((packed)) acpi_madt {
     struct acpi_sdt_header header;
     u32 lapic_addr;
     u32 flags;
     u8 entries[];
 };
 
-__attribute__((packed))
-struct acpi_rsdt {
+struct __attribute__((packed)) acpi_rsdt {
     struct acpi_sdt_header header;
     u32 entries[];
 };
@@ -318,8 +311,7 @@ enum {
     MADT_OVERRIDE = 2
 };
 
-__attribute__((packed))
-struct madt_ioapic_entry {
+struct __attribute__((packed)) madt_ioapic_entry {
     u8 type;
     u8 length;
     u8 ioapic_id;
@@ -328,8 +320,7 @@ struct madt_ioapic_entry {
     u32 gsi_base;
 };
 
-__attribute__((packed))
-struct madt_lapic_entry {
+struct __attribute__((packed)) madt_lapic_entry {
     u8 type;
     u8 length;
     u8 cpu_id;
@@ -349,8 +340,7 @@ struct lapic {
     u32 flags;
 };
 
-__attribute__((packed))
-struct gdt_entry {
+struct __attribute__((packed)) gdt_entry {
     u16 limit_low;
     u16 base_low;
     u8 base_middle;
@@ -359,8 +349,8 @@ struct gdt_entry {
     u8 base_high;
 };
 
-__attribute__((packed))
-struct idt_gate {
+
+struct __attribute__((packed)) idt_gate {
     u64 off_15_0 : 16;   // low 16 bits of offset in segment
     u64 cs : 16;         // code segment selector
     u64 args : 5;        // # args, 0 for interrupt/trap gates
@@ -493,20 +483,6 @@ static void sti(void) {
 
 static void cli(void) {
     asm volatile ("cli");
-}
-
-static void draw_char(int x, int y, char c, u32 color) {
-    for (int row = 0; row < 8; row++) {
-        unsigned char bits = font8x8[(size_t)c][row];
-        for (int col = 0; col < 8; col++) {
-            if (bits & (1 << (7 - col)))
-                framebuffer[(y + row) * framebuffer_width + (x + col)] = color;
-        }
-    }
-}
-
-static void clear_framebuffer() {
-    memset((void *)framebuffer, 0, framebuffer_width * framebuffer_height * sizeof(uint32_t));
 }
 
 static void init_serial(void) {
@@ -972,7 +948,7 @@ static void init_paging(void) {
 
 static void madt_parse(struct acpi_madt *madt) {
     lapic = (volatile u32 *)p2v(madt->lapic_addr);
-    
+
     u8 *ptr = madt->entries;
     u8 *end = (u8 *)madt + madt->header.length;
 
@@ -984,7 +960,7 @@ static void madt_parse(struct acpi_madt *madt) {
             break;
 
         switch (type) {
-            case MADT_IOAPIC:
+            case MADT_IOAPIC: {
                 struct madt_ioapic_entry *ioe = (struct madt_ioapic_entry *)ptr;
                 if (ioapic_count >= MAX_IOAPICS) {
                     early_printf("Too many ioapics\n");
@@ -995,7 +971,8 @@ static void madt_parse(struct acpi_madt *madt) {
                 ioapics[ioapic_count].gsi_base = ioe->gsi_base;
                 ioapic_count++;
                 break;
-            case MADT_LAPIC:
+            }
+            case MADT_LAPIC: {
                 struct madt_lapic_entry *le = (struct madt_lapic_entry *)ptr;
                 if (lapic_count >= MAX_LAPICS) {
                     early_printf("Too many lapics\n");
@@ -1005,6 +982,7 @@ static void madt_parse(struct acpi_madt *madt) {
                 lapics[lapic_count].apic_id = le->apic_id;
                 lapics[lapic_count].flags = le->flags;
                 lapic_count++;
+            }
             default:
                 break;
         }
@@ -1025,7 +1003,7 @@ static void xsdt_parse(struct acpi_xsdt *xsdt) {
             return;
         }
     }
-    
+
     early_printf("APIC entry not found in xsdt\n");
     hcf();
 }
@@ -1075,19 +1053,19 @@ static void gdt_set_entry(int num, u32 base, u32 limit, u8 access, u8 gran) {
 static void init_gdt(void) {
     // Null entry
     gdt_set_entry(0, 0, 0, 0, 0);
-    
+
     // Kernel code segment (index 1)
     gdt_set_entry(SEG_KCODE, 0, 0xFFFFF, 0x9A, 0xAF);
-    
+
     // Kernel data segment (index 2)
     gdt_set_entry(SEG_KDATA, 0, 0xFFFFF, 0x92, 0xAF);
-    
+
     // User code segment (index 3)
     gdt_set_entry(SEG_UCODE, 0, 0xFFFFF, 0xFA, 0xAF);
-    
+
     // User data segment (index 4)
     gdt_set_entry(SEG_UDATA, 0, 0xFFFFF, 0xF2, 0xAF);
-    
+
     lgdt(gdt, sizeof(gdt));
     reset_segment_registers(); // <- this guys a loser
 }
@@ -1104,7 +1082,7 @@ static void init_lapic(void) {
     }
 
     map_page_early(kernel_ptl4, v2p((uintptr_t)lapic), (uintptr_t)lapic, PAGE_P | PAGE_RW);
-    
+
     lapicw(APIC_SVR, APIC_ENABLE | (TRAP_IRQ0 + IRQ_SPURIOUS));
 
     lapicw(APIC_TDCR, APIC_X1);
@@ -1148,7 +1126,7 @@ static void ioapicwrite(u64 index, u32 reg, u32 data) {
 static void init_ioapic(void) {
     for (u64 i = 0; i < ioapic_count; i++) {
         map_page_early(kernel_ptl4, v2p((uintptr_t)ioapics[i].addr), (uintptr_t)ioapics[i].addr, PAGE_P | PAGE_RW);
-        
+
         u32 id;
         u32 maxintr;
 
@@ -1228,7 +1206,7 @@ static void ap_enter(void) {
 
 void kmain(void) {
     init_serial();
-    
+
     validate_bootloader();
 
     load_framebuffer();
