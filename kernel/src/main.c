@@ -201,6 +201,8 @@ static void hcf(void) {
 
 #define INTERRUPT_COUNT 256
 
+#define COM1 0x3F8
+
 typedef struct {
     u64 entry;
 } ptl1e_t;
@@ -404,7 +406,7 @@ struct trap_frame {
     u64 ss;
 };
 
-static struct gdt_entry gdt[3];
+static struct gdt_entry gdt[5];
 
 static struct idt_gate idt[INTERRUPT_COUNT];
 
@@ -460,6 +462,13 @@ static void outb(u16 port, u8 val) {
     asm volatile("outb %0, %1" : : "a"(val), "Nd"(port));
 }
 
+static u8 inb(u16 port) {
+  u8 ret;
+  asm volatile("inb %1, %0" : "=a"(ret) : "Nd"(port));
+  return ret;
+}
+
+
 static void lidt(void *base, u16 size) {
     struct {
         u16 len;
@@ -500,77 +509,184 @@ static void clear_framebuffer() {
     memset((void *)framebuffer, 0, framebuffer_width * framebuffer_height * sizeof(uint32_t));
 }
 
-static void putc(char c) {
-    static int cursor_x = 0;
-    static int cursor_y = 0;
+static void init_serial(void) {
+    outb(COM1 + 1, 0x00);
+    outb(COM1 + 3, 0x80);
+    outb(COM1 + 0, 0x03);
+    outb(COM1 + 1, 0x00);
+    outb(COM1 + 3, 0x03);
+    outb(COM1 + 2, 0xC7);
+    outb(COM1 + 4, 0x0B);
+}
 
-    switch (c) {
-        case '\n': {
-            cursor_y++;
-            cursor_x = 0;
-            break;
+static int is_transmit_empty(void) {
+    return inb(COM1 + 5) & 0x20;
+}
+
+static void serial_putc(char c) {
+    while (!is_transmit_empty());
+    outb(COM1, c);
+}
+
+static void early_printf(const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+
+    for (const char *p = fmt; *p; p++) {
+        if (*p == '%') {
+            p++;
+            int is_long = 0;
+
+            // check for 'l' prefix
+            if (*p == 'l') {
+                is_long = 1;
+                p++;
+            }
+
+            switch (*p) {
+            case 's': {
+                char *str = va_arg(args, char *);
+                for (; *str; str++)
+                    serial_putc(*str);
+                break;
+            }
+            case 'd': {
+                if (is_long) {
+                    long num = va_arg(args, long);
+                    if (num < 0) {
+                        serial_putc('-');
+                        num = -num;
+                    }
+                    char buf[30];
+                    int i = 0;
+                    if (num == 0)
+                        buf[i++] = '0';
+                    while (num > 0) {
+                        buf[i++] = '0' + (num % 10);
+                        num /= 10;
+                    }
+                    while (i--)
+                        serial_putc(buf[i]);
+                } else {
+                    int num = va_arg(args, int);
+                    if (num < 0) {
+                        serial_putc('-');
+                        num = -num;
+                    }
+                    char buf[20];
+                    int i = 0;
+                    if (num == 0)
+                        buf[i++] = '0';
+                    while (num > 0) {
+                        buf[i++] = '0' + (num % 10);
+                        num /= 10;
+                    }
+                    while (i--)
+                        serial_putc(buf[i]);
+                }
+                break;
+            }
+            case 'u': {
+                if (is_long) {
+                    unsigned long num = va_arg(args, unsigned long);
+                    char buf[30];
+                    int i = 0;
+                    if (num == 0)
+                        buf[i++] = '0';
+                    while (num > 0) {
+                        buf[i++] = '0' + (num % 10);
+                        num /= 10;
+                    }
+                    while (i--)
+                        serial_putc(buf[i]);
+                } else {
+                    unsigned int num = va_arg(args, unsigned int);
+                    char buf[20];
+                    int i = 0;
+                    if (num == 0)
+                        buf[i++] = '0';
+                    while (num > 0) {
+                        buf[i++] = '0' + (num % 10);
+                        num /= 10;
+                    }
+                    while (i--)
+                        serial_putc(buf[i]);
+                }
+                break;
+            }
+            case 'x': {
+                serial_putc('0');
+                serial_putc('x');
+                if (is_long) {
+                    unsigned long num = va_arg(args, unsigned long);
+                    char buf[16];
+                    int i = 0;
+                    if (num == 0)
+                        buf[i++] = '0';
+                    while (num > 0) {
+                        uint8_t digit = num & 0xF;
+                        buf[i++] =
+                            (digit < 10) ? ('0' + digit) : ('a' + digit - 10);
+                        num >>= 4;
+                    }
+                    while (i--) {
+                        serial_putc(buf[i]);
+                    }
+                } else {
+                    unsigned int num = va_arg(args, unsigned int);
+                    char buf[8];
+                    int i = 0;
+                    if (num == 0)
+                        buf[i++] = '0';
+                    while (num > 0) {
+                        uint8_t digit = num & 0xF;
+                        buf[i++] =
+                            (digit < 10) ? ('0' + digit) : ('a' + digit - 10);
+                        num >>= 4;
+                    }
+                    while (i--)
+                        serial_putc(buf[i]);
+                }
+                break;
+            }
+            case 'c': {
+                char c = (char)va_arg(args, int);
+                serial_putc(c);
+                break;
+            }
+            case 'p': {
+                uint64_t ptr = (uint64_t)va_arg(args, void *);
+                serial_putc('0');
+                serial_putc('x');
+                char buf[16];
+                int i = 0;
+                if (ptr == 0) {
+                    serial_putc('0');
+                } else {
+                    while (ptr > 0) {
+                        uint8_t digit = ptr & 0xF;
+                        buf[i++] =
+                            (digit < 10) ? ('0' + digit) : ('a' + digit - 10);
+                        ptr >>= 4;
+                    }
+                    while (i--)
+                        serial_putc(buf[i]);
+                }
+                break;
+            }
+            case '%':
+                serial_putc('%');
+                break;
+            default:
+                serial_putc('?');
+                break;
+            }
+        } else {
+            serial_putc(*p);
         }
-        default: {
-            outb(0x3F8, c);
-            draw_char(cursor_x * 8, cursor_y * 8, c, 0xFFFFFFFF);
-            cursor_x = cursor_x + 1;
-            break;
-        }
     }
 
-    if (cursor_x >= framebuffer_width / FONT_CHAR_WIDTH) {
-        cursor_x = 0;
-        cursor_y = cursor_y + 1;
-    }
-
-    if (cursor_y >= framebuffer_height / FONT_CHAR_HEIGHT) {
-        clear_framebuffer();
-        cursor_y = 0;
-        cursor_x = 0;
-    }
-}
-
-static void puts(const char *s) {
-    if (!s) {
-        putc('('); putc('n'); putc('u'); putc('l'); putc('l'); putc(')');
-        return;
-    }
-    while (*s)
-        putc(*s++);
-}
-
-static void putuint(u64 num, unsigned base) {
-    char buf[32];
-    int i = 0;
-
-    if (num == 0) {
-        putc('0');
-        return;
-    }
-
-    while (num > 0) {
-        u8 digit = num % base;
-        buf[i++] = (digit < 10) ? ('0' + digit) : ('a' + digit - 10);
-        num /= base;
-    }
-
-    while (i--)
-        putc(buf[i]);
-}
-
-static void putint(s64 num) {
-    if (num < 0) {
-        putc('-');
-        putuint((u64)(-num), 10);
-    } else {
-        putuint((u64)num, 10);
-    }
-}
-
-static void puthex(u64 num) {
-    putc('0');
-    putc('x');
-    putuint(num, 16);
+    va_end(args);
 }
 
 static void validate_bootloader(void) {
@@ -627,7 +743,7 @@ static void load_memmap(void) {
                 memmap.regions[i].type = MEMMAP_REGION_ACPI_TABLES;
                 break;
             default: // This should cover all of limines possible types but in the case of an error we should stop
-                puts("Invalid or unsupported region type in limine memmap\n");
+                early_printf("Invalid or unsupported region type in limine memmap\n");
                 hcf();
         }
     }
@@ -653,9 +769,9 @@ static size_t page_round_down(uintptr_t addr) {
     return addr & ~(PAGE_SIZE - 1);
 }
 
-static void free_pages_early(void *addr, size_t order) {
+static void early_kfree(void *addr, size_t order) {
     if ((size_t)addr % PAGE_SIZE != 0) {
-        puts("Attempted to free unaligned page\n");
+        early_printf("Attempted to free unaligned page\n");
         hcf();
     }
 
@@ -677,7 +793,7 @@ static void free_pages_early(void *addr, size_t order) {
                 else
                     block = curr;
 
-                free_pages_early(block, order + 1);
+                early_kfree(block, order + 1);
                 return;
             }
         }
@@ -701,7 +817,7 @@ static void free_range(void *base, void *end) {
         while (order > 0 && ((size_t)PAGE_SIZE << order > remaining || (p & (((size_t)PAGE_SIZE << order) - 1)) != 0))
             order--;
 
-        free_pages_early((void *)p, order);
+        early_kfree((void *)p, order);
         p += PAGE_SIZE << order;
     }
 }
@@ -718,9 +834,9 @@ static void free_usable_regions(void) {
     }
 }
 
-static void *kalloc_early(size_t order) {
+static void *early_kalloc(size_t order) {
     if (order > MAX_ORDER) {
-        puts("Invalid order for kalloc_early\n");
+        early_printf("Invalid order for early_kalloc\n");
         hcf();
     }
 
@@ -756,7 +872,7 @@ static void *kalloc_early(size_t order) {
         }
     }
 
-    puts("Could not find suitable block for kalloc_early\n");
+    early_printf("Could not find suitable block for early_kalloc\n");
     hcf();
 }
 
@@ -765,7 +881,7 @@ static ptl3_t *walk_ptl4(ptl4_t *ptl4, u64 index, int create) {
         if (!create)
             return 0;
 
-        void *new_page = kalloc_early(0);
+        void *new_page = early_kalloc(0);
         memset(new_page, 0, PAGE_SIZE);
         ptl4->table[index].entry = v2p((uintptr_t)new_page) | PAGE_P | PAGE_RW;
     }
@@ -778,7 +894,7 @@ static ptl2_t *walk_ptl3(ptl3_t *ptl3, u64 index, int create) {
         if (!create)
             return 0;
 
-        void *new_page = kalloc_early(0);
+        void *new_page = early_kalloc(0);
         memset(new_page, 0, PAGE_SIZE);
         ptl3->table[index].entry = v2p((uintptr_t)new_page) | PAGE_P | PAGE_RW;
     }
@@ -791,7 +907,7 @@ static ptl1_t *walk_ptl2(ptl2_t *ptl2, uintptr_t index, int create) {
         if (!create)
             return 0;
 
-        void *new_page = kalloc_early(0);
+        void *new_page = early_kalloc(0);
         memset(new_page, 0, PAGE_SIZE);
         ptl2->table[index].entry = v2p((uintptr_t)new_page) | PAGE_P | PAGE_RW;
     }
@@ -799,7 +915,7 @@ static ptl1_t *walk_ptl2(ptl2_t *ptl2, uintptr_t index, int create) {
     return (ptl1_t *)p2v(ptl2->table[index].entry & ~0xFFF);
 }
 
-static void map_page(ptl4_t *l4, uintptr_t pa, uintptr_t va, uintptr_t flags) {
+static void map_page_early(ptl4_t *l4, uintptr_t pa, uintptr_t va, uintptr_t flags) {
     uintptr_t l4_index = (va >> 39) & 0x1FF;
     uintptr_t l3_index = (va >> 30) & 0x1FF;
     uintptr_t l2_index = (va >> 21) & 0x1FF;
@@ -817,7 +933,7 @@ static void switch_ptl4(ptl4_t *l4) {
 }
 
 static void init_paging(void) {
-    kernel_ptl4 = kalloc_early(0);
+    kernel_ptl4 = early_kalloc(0);
     memset(kernel_ptl4, 0, PAGE_SIZE);
 
     for (size_t i = 0; i < memmap.region_count; i++) {
@@ -830,17 +946,11 @@ static void init_paging(void) {
             case MEMMAP_REGION_BOOTLOADER_RECLAIMABLE:
             case MEMMAP_REGION_FRAMEBUFFER:
             case MEMMAP_REGION_ACPI_TABLES:
-                puts("mapping region: ");
-                puthex(memmap.regions[i].phys);
-                puts(" -> ");
-                puthex(p2v(memmap.regions[i].phys));
-                puts(", size: ");
-                puthex(memmap.regions[i].size);
-                puts("\n");
+                early_printf("mapping region: %lx -> %lx, size: %lx\n", memmap.regions[i].phys, p2v(memmap.regions[i].phys), memmap.regions[i].size);
                 for (uintptr_t j = 0; j < memmap.regions[i].size; j += PAGE_SIZE) {
                     uintptr_t pa = j + memmap.regions[i].phys;
                     uintptr_t va = p2v(pa);
-                    map_page(kernel_ptl4, pa, va, PAGE_P | PAGE_RW);
+                    map_page_early(kernel_ptl4, pa, va, PAGE_P | PAGE_RW);
                 }
                 break;
             case MEMMAP_REGION_EXECUTABLE_AND_MODULES: {
@@ -850,7 +960,7 @@ static void init_paging(void) {
                     uintptr_t flags = PAGE_P;
                     if (va >= (uintptr_t)__data_start)
                         flags |= PAGE_RW;
-                    map_page(kernel_ptl4, pa, va, flags);
+                    map_page_early(kernel_ptl4, pa, va, flags);
                 }
                 break;
             }
@@ -877,7 +987,7 @@ static void madt_parse(struct acpi_madt *madt) {
             case MADT_IOAPIC:
                 struct madt_ioapic_entry *ioe = (struct madt_ioapic_entry *)ptr;
                 if (ioapic_count >= MAX_IOAPICS) {
-                    puts("Too many ioapics\n");
+                    early_printf("Too many ioapics\n");
                     hcf();
                 }
                 ioapics[ioapic_count].id = ioe->ioapic_id;
@@ -888,7 +998,7 @@ static void madt_parse(struct acpi_madt *madt) {
             case MADT_LAPIC:
                 struct madt_lapic_entry *le = (struct madt_lapic_entry *)ptr;
                 if (lapic_count >= MAX_LAPICS) {
-                    puts("Too many lapics\n");
+                    early_printf("Too many lapics\n");
                     hcf();
                 }
                 lapics[lapic_count].cpu_id = le->cpu_id;
@@ -916,7 +1026,7 @@ static void xsdt_parse(struct acpi_xsdt *xsdt) {
         }
     }
     
-    puts("APIC entry not found in xsdt\n");
+    early_printf("APIC entry not found in xsdt\n");
     hcf();
 }
 
@@ -934,13 +1044,13 @@ static void rsdt_parse(struct acpi_rsdt *rsdt) {
         }
     }
 
-    puts("APIC entry not found in rsdt\n");
+    early_printf("APIC entry not found in rsdt\n");
     hcf();
 }
 
 static void load_apic(void) {
     if (rsdp_request.response == NULL) {
-        puts("No acpi present\n");
+        early_printf("No acpi present\n");
         return;
     }
     struct acpi_rsdp *rsdp = (struct acpi_rsdp *)rsdp_request.response->address;
@@ -989,11 +1099,11 @@ static void lapicw(size_t index, int value) {
 
 static void init_lapic(void) {
     if (!lapic) {
-        puts("No lapic found\n");
+        early_printf("No lapic found\n");
         hcf();
     }
 
-    map_page(kernel_ptl4, v2p((uintptr_t)lapic), (uintptr_t)lapic, PAGE_P | PAGE_RW);
+    map_page_early(kernel_ptl4, v2p((uintptr_t)lapic), (uintptr_t)lapic, PAGE_P | PAGE_RW);
     
     lapicw(APIC_SVR, APIC_ENABLE | (TRAP_IRQ0 + IRQ_SPURIOUS));
 
@@ -1037,7 +1147,7 @@ static void ioapicwrite(u64 index, u32 reg, u32 data) {
 
 static void init_ioapic(void) {
     for (u64 i = 0; i < ioapic_count; i++) {
-        map_page(kernel_ptl4, v2p((uintptr_t)ioapics[i].addr), (uintptr_t)ioapics[i].addr, PAGE_P | PAGE_RW);
+        map_page_early(kernel_ptl4, v2p((uintptr_t)ioapics[i].addr), (uintptr_t)ioapics[i].addr, PAGE_P | PAGE_RW);
         
         u32 id;
         u32 maxintr;
@@ -1091,41 +1201,16 @@ void trap(struct trap_frame *tf) {
         case TRAP_IRQ0 + IRQ_TIMER:
             ticks++;
             if (ticks % 100 == 0)
-                puts("Timer!\n");
+                early_printf("Timer!\n");
             lapic_eoi();
             return;
         case TRAP_GENERAL_PROTECTION_FAULT:
-            puts("GPF: ");
-            puthex(tf->error);
-            puts("\n");
-            puts("ss: ");
-            puthex(tf->ss);
-            puts("\n");
-            puts("cs: ");
-            puthex(tf->cs);
-            puts("\n");
-            puts("rip: ");
-            puthex(tf->rip);
-            puts("\n");
-            puts("rflags: ");
-            puthex(tf->rflags);
-            puts("\n");
+            early_printf("GPF: %lx, ss: %lx, cs: %lx, rip: %lx, rflags: %lx\n", tf->error, tf->ss, tf->cs, tf->rip, tf->rflags);
             hcf();
         default:
-            puts("Unhandled Trap vector: ");
-            puthex(tf->vector);
-            puts(", error: ");
-            puthex(tf->error);
-            puts("\n");
+            early_printf("Unhandled Trap vector: %lx, error: %lx", tf->vector, tf->error);
             hcf();
     }
-
-    puts("vector: ");
-    puthex(tf->vector);
-    puts(", error: ");
-    puthex(tf->error);
-    puts("\n");
-    hcf();
 }
 
 static void mp_main(void) {
@@ -1142,6 +1227,8 @@ static void ap_enter(void) {
 }
 
 void kmain(void) {
+    init_serial();
+    
     validate_bootloader();
 
     load_framebuffer();
