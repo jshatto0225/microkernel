@@ -197,6 +197,13 @@ static __attribute__((noreturn)) void hcf(void) {
 
 #define COM1 0x3F8
 
+#define RFLAG_IF 0x00000200
+
+#define PROC_COUNT 8
+
+#define KSTACK_SIZE PAGE_SIZE
+#define KSTACK_ORDER 0
+
 typedef struct {
     u64 entry;
 } ptl1e_t;
@@ -387,6 +394,31 @@ struct trap_frame {
     u64 ss;
 } __attribute__((packed));
 
+struct context {
+    u64 rbx;
+    u64 rbp;
+    u64 r12;
+    u64 r13;
+    u64 r14;
+    u64 r15;
+
+    u64 rsp;
+} __attribute__((packed));
+
+enum process_state {
+    PROC_DEAD,
+    PROC_RUNNING,
+    PROC_RUNNABLE,
+    PROC_SLEEPING
+};
+
+struct proc {
+    struct context context;
+    void *channel;
+    enum process_state state;
+    void *stack;
+};
+
 static struct gdt_entry gdt[5];
 
 static struct idt_gate idt[INTERRUPT_COUNT];
@@ -422,6 +454,26 @@ static struct ioapic ioapics[MAX_IOAPICS];
 
 static size_t lapic_count;
 static struct lapic lapics[MAX_LAPICS];
+
+static u64 sched_ticks;
+
+static u64 cli_count;
+static struct proc *current_proc;
+static int interrupts_enabled;
+static struct context scheduler_context;
+
+static struct proc proc_table[PROC_COUNT];
+
+extern void switch_proc(struct context *old, struct context *new);
+
+static void pushcli(void);
+static void popcli(void);
+
+static u64 readrflags(void) {
+    u64 rflags;
+    asm volatile("pushfq; popq %0" : "=r"(rflags));
+    return rflags;
+}
 
 static  void reset_segment_registers(void) {
   asm volatile(
@@ -494,7 +546,14 @@ static void serial_putc(char c) {
     outb(COM1, c);
 }
 
+static void serial_puts(const char *s) {
+    while (*s)
+        serial_putc(*s++);
+}
+
 static void early_printf(const char *fmt, ...) {
+    pushcli();
+
     va_list args;
     va_start(args, fmt);
 
@@ -653,17 +712,41 @@ static void early_printf(const char *fmt, ...) {
     }
 
     va_end(args);
+
+    popcli();
+}
+
+static void panic(const char *msg) {
+    serial_puts(msg);
+    hcf();
+}
+
+static void pushcli(void) {
+    u64 rflags = readrflags();
+    cli();
+    if (cli_count == 0)
+        interrupts_enabled = rflags & RFLAG_IF;
+    cli_count++;
+}
+
+static void popcli(void) {
+    if (readrflags() & RFLAG_IF)
+        panic("popcli - interruptable");
+    if (cli_count == 0)
+        panic("popcli - cli_count =+ 0");
+    if (--cli_count == 0 && interrupts_enabled)
+        sti();
 }
 
 static void validate_bootloader(void) {
     if (LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision) == false)
-        hcf();
+        panic("Limine base revision is not supported!\n");
     if (framebuffer_request.response == NULL || framebuffer_request.response->framebuffer_count < 1)
-        hcf();
+        panic("Bad framebuffer request!\n");
     if (memmap_request.response == NULL || memmap_request.response->entry_count < 1 || memmap_request.response->entry_count > MAX_MEMMAP_REGIONS)
-        hcf();
+        panic("Bad memmap request\n");
     if (hhdm_request.response == NULL)
-        hcf();
+        panic("Bad hhdm request\n");
 }
 
 static void load_framebuffer(void) {
@@ -709,8 +792,7 @@ static void load_memmap(void) {
                 memmap.regions[i].type = MEMMAP_REGION_ACPI_TABLES;
                 break;
             default: // This should cover all of limines possible types but in the case of an error we should stop
-                early_printf("Invalid or unsupported region type in limine memmap\n");
-                hcf();
+                panic("Invalid or unsupported region type in limine memmap\n");
         }
     }
 }
@@ -737,8 +819,7 @@ static size_t page_round_down(uintptr_t addr) {
 
 static void early_kfree(void *addr, size_t order) {
     if ((size_t)addr % PAGE_SIZE != 0) {
-        early_printf("Attempted to free unaligned page\n");
-        hcf();
+        panic("Attempted to free unaligned page\n");
     }
 
     struct free_list_node *n = (struct free_list_node *)addr;
@@ -802,8 +883,7 @@ static void free_usable_regions(void) {
 
 static void *early_kalloc(size_t order) {
     if (order > MAX_ORDER) {
-        early_printf("Invalid order for early_kalloc\n");
-        hcf();
+        panic("Invalid order for early_kalloc\n");
     }
 
     struct free_list_node **pcurr = &free_list[order];
@@ -838,8 +918,7 @@ static void *early_kalloc(size_t order) {
         }
     }
 
-    early_printf("Could not find suitable block for early_kalloc\n");
-    hcf();
+    panic("Could not find suitable block for early_kalloc\n");
 }
 
 static ptl3_t *walk_ptl4(ptl4_t *ptl4, size_t index, int create) {
@@ -924,6 +1003,7 @@ static void init_paging(void) {
                     uintptr_t pa = j + memmap.regions[i].phys;
                     uintptr_t va = j + (uintptr_t)__kernel_offset;
                     uintptr_t flags = PAGE_P;
+                    early_printf("mapping region: %lx -> %lx, size: %lx\n", pa, va, memmap.regions[i].size);
                     if (va >= (uintptr_t)__data_start)
                         flags |= PAGE_RW;
                     map_page_early(kernel_ptl4, pa, va, flags);
@@ -953,8 +1033,7 @@ static void madt_parse(struct acpi_madt *madt) {
             case MADT_IOAPIC: {
                 struct madt_ioapic_entry *ioe = (struct madt_ioapic_entry *)ptr;
                 if (ioapic_count >= MAX_IOAPICS) {
-                    early_printf("Too many ioapics\n");
-                    hcf();
+                    panic("Too many ioapics\n");
                 }
                 ioapics[ioapic_count].id = ioe->ioapic_id;
                 ioapics[ioapic_count].addr = (volatile u32 *)p2v(ioe->ioapic_addr);
@@ -965,8 +1044,7 @@ static void madt_parse(struct acpi_madt *madt) {
             case MADT_LAPIC: {
                 struct madt_lapic_entry *le = (struct madt_lapic_entry *)ptr;
                 if (lapic_count >= MAX_LAPICS) {
-                    early_printf("Too many lapics\n");
-                    hcf();
+                    panic("Too many lapics\n");
                 }
                 lapics[lapic_count].cpu_id = le->cpu_id;
                 lapics[lapic_count].apic_id = le->apic_id;
@@ -994,8 +1072,7 @@ static void xsdt_parse(struct acpi_xsdt *xsdt) {
         }
     }
 
-    early_printf("APIC entry not found in xsdt\n");
-    hcf();
+    panic("APIC entry not found in xsdt\n");
 }
 
 static void rsdt_parse(struct acpi_rsdt *rsdt) {
@@ -1012,8 +1089,7 @@ static void rsdt_parse(struct acpi_rsdt *rsdt) {
         }
     }
 
-    early_printf("APIC entry not found in rsdt\n");
-    hcf();
+    panic("APIC entry not found in rsdt\n");
 }
 
 static void load_apic(void) {
@@ -1060,39 +1136,44 @@ static void init_gdt(void) {
     reset_segment_registers(); // <- this guys a loser
 }
 
-static void lapicw(size_t index, int value) {
+static void lapic_write(size_t index, int value) {
     lapic[index] = value;
     (void)lapic[APIC_ID];
 }
 
+static u32 lapic_read(size_t index) {
+    return lapic[index];
+}
+
 static void init_lapic(void) {
     if (!lapic) {
-        early_printf("No lapic found\n");
-        hcf();
+        panic("No lapic found\n");
     }
 
     map_page_early(kernel_ptl4, v2p((uintptr_t)lapic), (uintptr_t)lapic, PAGE_P | PAGE_RW);
 
-    lapicw(APIC_SVR, APIC_ENABLE | (TRAP_IRQ0 + IRQ_SPURIOUS));
+    lapic_write(APIC_SVR, APIC_ENABLE | (TRAP_IRQ0 + IRQ_SPURIOUS));
 
-    lapicw(APIC_TDCR, APIC_X1);
-    lapicw(APIC_TIMER, APIC_PERIODIC | (TRAP_IRQ0 + IRQ_TIMER));
-    lapicw(APIC_TICR, 10000000);
+    u32 timer_frequency_hz = 1000;
+    u32 lapic_clock_hz = 1000000000;
+    lapic_write(APIC_TDCR, APIC_X1);
+    lapic_write(APIC_TIMER, APIC_PERIODIC | (TRAP_IRQ0 + IRQ_TIMER));
+    lapic_write(APIC_TICR, lapic_clock_hz / timer_frequency_hz);
 
-    lapicw(APIC_LINT0, APIC_MASKED);
-    lapicw(APIC_LINT1, APIC_MASKED);
+    lapic_write(APIC_LINT0, APIC_MASKED);
+    lapic_write(APIC_LINT1, APIC_MASKED);
 
     if (((lapic[APIC_VER] >> 16) & 0xFF) >= 4)
-        lapicw(APIC_PCINT, APIC_MASKED);
+        lapic_write(APIC_PCINT, APIC_MASKED);
 
-    lapicw(APIC_ERROR, TRAP_IRQ0 + IRQ_ERROR);
+    lapic_write(APIC_ERROR, TRAP_IRQ0 + IRQ_ERROR);
 
-    lapicw(APIC_ESR, 0);
-    lapicw(APIC_ESR, 0);
+    lapic_write(APIC_ESR, 0);
+    lapic_write(APIC_ESR, 0);
 
-    lapicw(APIC_EOI, 0);
+    lapic_write(APIC_EOI, 0);
 
-    lapicw(APIC_TPR, 0);
+    lapic_write(APIC_TPR, 0);
 }
 
 static void init_pic(void) {
@@ -1159,33 +1240,180 @@ static void init_tv(void) {
 
 static void lapic_eoi(void) {
     if (lapic)
-        lapicw(APIC_EOI, 0);
+        lapic_write(APIC_EOI, 0);
+}
+
+static void print_tf(struct trap_frame *tf) {
+    early_printf("r15: %lx\n", tf->r15);
+    early_printf("r14: %lx\n", tf->r14);
+    early_printf("r13: %lx\n", tf->r13);
+    early_printf("r12: %lx\n", tf->r12);
+    early_printf("r11: %lx\n", tf->r11);
+    early_printf("r10: %lx\n", tf->r10);
+    early_printf("r9: %lx\n", tf->r9);
+    early_printf("r8: %lx\n", tf->r8);
+    early_printf("rdi: %lx\n", tf->rdi);
+    early_printf("rsi: %lx\n", tf->rsi);
+    early_printf("rbp: %lx\n", tf->rbp);
+    early_printf("rbx: %lx\n", tf->rbx);
+    early_printf("rdx: %lx\n", tf->rdx);
+    early_printf("rcx: %lx\n", tf->rcx);
+    early_printf("rax: %lx\n", tf->rax);
+    early_printf("vector: %lx\n", tf->vector);
+    early_printf("error: %lx\n", tf->error);
+    early_printf("rip: %lx\n", tf->rip);
+    early_printf("cs: %lx\n", tf->cs);
+    early_printf("rflags: %lx\n", tf->rflags);
+    early_printf("rsp: %lx\n", tf->rsp);
+    early_printf("ss: %lx\n", tf->ss);
+}
+
+static struct proc *my_proc(void) {
+    return current_proc;
+}
+
+static void kthread_create(void (* fn)()) {
+    for (struct proc *p = proc_table; p < &proc_table[PROC_COUNT]; p++) {
+        if (p->state != PROC_DEAD)
+            continue;
+
+        cli();
+
+        memset(&p->context, 0, sizeof(struct context));
+
+        p->state = PROC_RUNNABLE;
+        p->channel = NULL;
+        p->stack = early_kalloc(KSTACK_ORDER);
+
+        uintptr_t *sp = (uintptr_t *)((char *)p->stack + KSTACK_SIZE);
+        *--sp = (uintptr_t)fn;
+        p->context.rsp = (uintptr_t)sp;
+
+        sti();
+        return;
+    }
+}
+
+static void scheduler() {
+    sti();
+
+    for (;;) {
+        pushcli();
+
+        for (struct proc *p = proc_table; p < &proc_table[PROC_COUNT]; p++) {
+            if (p->state != PROC_RUNNABLE)
+                continue;
+
+            current_proc = p;
+            p->state = PROC_RUNNING;
+
+            switch_proc(&scheduler_context, &p->context);
+
+            current_proc = 0;
+        }
+
+        popcli();
+    }
+}
+
+static void _wake_up(void *channel) {
+    for (struct proc *p = proc_table; p < &proc_table[PROC_COUNT]; p++) {
+        if (p->state == PROC_SLEEPING && p->channel == channel)
+            p->state = PROC_RUNNABLE;
+    }
+}
+
+static void wake_up(void *channel) {
+    pushcli();
+    _wake_up(channel);
+    popcli();
+}
+
+static void sched(void) {
+    struct proc *p = my_proc();
+
+    if (cli_count != 1)
+        panic("cli_count != 1 in sched\n");
+    if (p->state == PROC_RUNNING)
+        panic("process already running in sched\n");
+    if (readrflags() & RFLAG_IF)
+        panic("sched is interruptable\n");
+    int int_enabled = interrupts_enabled;
+    switch_proc(&p->context, &scheduler_context);
+    interrupts_enabled = int_enabled;
+}
+
+static void exit(void) {
+    pushcli();
+    my_proc()->state = PROC_DEAD;
+    sched();
+    panic("dead process exit\n");
+}
+
+static void yield(void) {
+    pushcli();
+    my_proc()->state = PROC_RUNNABLE;
+    sched();
+    popcli();
 }
 
 void trap(struct trap_frame *tf) {
     switch (tf->vector) {
-        case TRAP_IRQ0 + IRQ_TIMER:
-            lapic_eoi();
-            return;
+        case TRAP_ILLEGAL_OPCODE:
+            panic("Illegal Opcode!\n");
+        case TRAP_DOUBLE_FAULT:
+            panic("Double Fault!\n");
+        case TRAP_SEGMENT_NOT_PRESENT:
+            panic("Segment Not Present!\n");
+        case TRAP_STACK:
+            panic("Stack!\n");
         case TRAP_GENERAL_PROTECTION_FAULT:
-            early_printf("GPF: %lx, ss: %lx, cs: %lx, rip: %lx, rflags: %lx\n", tf->error, tf->ss, tf->cs, tf->rip, tf->rflags);
-            hcf();
+            panic("General Protection Fault!\n");
+        case TRAP_PAGE_FAULT:
+            panic("Page Fault!\n");
+        case TRAP_IRQ0 + IRQ_TIMER:
+            sched_ticks++;
+            wake_up(&sched_ticks);
+            lapic_eoi();
+            break;
         default:
-            early_printf("Unhandled Trap vector: %lx, error: %lx", tf->vector, tf->error);
-            hcf();
+            panic("Unexpected trap!\n");
+    }
+
+    if(my_proc() && my_proc()->state == PROC_RUNNING && tf->vector == TRAP_IRQ0 + IRQ_TIMER) {
+        // TODO: Bug
+        early_printf("HERE\n");
+        yield();
     }
 }
 
-static void mp_main(void) {
-    init_idt();
-//    init_sched();
-    sti();
+static void thread1(void) {
+    popcli();
+    for (;;)
+        early_printf("thread1!\n");
+    panic("Should not have left the loop\n");
 }
 
-static __attribute__((noreturn)) void ap_enter(void) {
-    mp_main();
+static void thread2(void) {
+    popcli();
+    for (;;)
+        early_printf("thread2!\n");
+    panic("Should not have left the loop\n");
+}
+
+static __attribute__((noreturn)) void mp_main(void) {
+    init_idt();
+
+    kthread_create(thread1);
+    kthread_create(thread2);
+
+    scheduler();
 
     hcf();
+}
+
+static void ap_enter(void) {
+    mp_main();
 }
 
 void kmain(void) {
@@ -1209,6 +1437,4 @@ void kmain(void) {
     init_tv();
 
     mp_main();
-
-    hcf();
 }
